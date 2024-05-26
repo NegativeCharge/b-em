@@ -7,6 +7,7 @@
 #include "sound.h"
 #include "via.h"
 #include "sysvia.h"
+#include "vgm.h"
 
 uint8_t sn_freqhi[4], sn_freqlo[4];
 uint8_t sn_vol[4];
@@ -167,6 +168,14 @@ static uint8_t firstdat;
 void sn_write(uint8_t data)
 {
         int freq;
+
+        if (vgm_rec.rec_started && vgm_rec.vgmpos != 1024)
+        {
+            int rec_pos = vgm_rec.vgmpos;
+            vgm_rec.vgmdat[rec_pos++] = 0x50;
+            vgm_rec.vgmdat[rec_pos++] = data;
+            vgm_rec.vgmpos = rec_pos;
+        }
 
         if (data & 0x80)
         {

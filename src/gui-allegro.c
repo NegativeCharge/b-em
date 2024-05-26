@@ -31,9 +31,10 @@
 #include "tapecat-allegro.h"
 #include "tube.h"
 #include "uservia.h"
+#include "vdfs.h"
+#include "vgm.h"
 #include "video.h"
 #include "video_render.h"
-#include "vdfs.h"
 
 #if defined(HAVE_JACK_JACK_H) || defined(HAVE_ALSA_ASOUNDLIB_H)
 #define HAVE_LINUX_MIDI
@@ -129,6 +130,7 @@ static ALLEGRO_MENU *create_file_menu(void)
     add_checkbox_item(menu, "Serial to file", IDM_FILE_SERIAL, sysacia_fp);
     add_checkbox_item(menu, music5000_rec.prompt, IDM_FILE_M5000, music5000_rec.fp);
     add_checkbox_item(menu, paula_rec.prompt, IDM_FILE_PAULAREC, paula_rec.fp);
+    add_checkbox_item(menu, vgm_rec.prompt, IDM_FILE_VGMREC, vgm_rec.fp1);
     add_checkbox_item(menu, sound_rec.prompt, IDM_FILE_SOUNDREC, sound_rec.fp);
     al_append_menu_item(menu, "Exit", IDM_FILE_EXIT, 0, NULL, NULL);
     return menu;
@@ -772,6 +774,25 @@ static void serial_rec(ALLEGRO_EVENT *event)
     }
 }
 
+static void toggle_vgmrecord(ALLEGRO_EVENT* event, vgm_sound_rec_t* rec)
+{
+    if (rec->fp1)
+        vgm_stop_rec(rec);
+    else {
+        ALLEGRO_FILECHOOSER* chooser = al_create_native_file_dialog(savestate_name, rec->prompt, "*.vgm", ALLEGRO_FILECHOOSER_SAVE);
+        if (chooser) {
+            ALLEGRO_DISPLAY* display = (ALLEGRO_DISPLAY*)(event->user.data2);
+            while (al_show_native_file_dialog(display, chooser)) {
+                if (al_get_native_file_dialog_count(chooser) <= 0)
+                    break;
+                if (vgm_start_rec(rec, al_get_native_file_dialog_path(chooser, 0)))
+                    break;
+            }
+            al_destroy_native_file_dialog(chooser);
+        }
+    }
+}
+
 static void toggle_record(ALLEGRO_EVENT *event, sound_rec_t *rec)
 {
     if (rec->fp)
@@ -790,6 +811,7 @@ static void toggle_record(ALLEGRO_EVENT *event, sound_rec_t *rec)
         }
     }
 }
+
 
 static void edit_paste_start(ALLEGRO_EVENT *event)
 {
@@ -1271,6 +1293,9 @@ void gui_allegro_event(ALLEGRO_EVENT *event)
             break;
         case IDM_FILE_SOUNDREC:
             toggle_record(event, &sound_rec);
+            break;
+        case IDM_FILE_VGMREC:
+            toggle_vgmrecord(event, &vgm_rec);
             break;
         case IDM_FILE_EXIT:
             quitting = true;

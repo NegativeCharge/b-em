@@ -232,6 +232,7 @@
     <ClInclude Include="uef.h" />
     <ClInclude Include="uservia.h" />
     <ClInclude Include="vdfs.h" />
+    <ClInclude Include="vgm.h" />
     <ClInclude Include="via.h" />
     <ClInclude Include="video.h" />
     <ClInclude Include="video_render.h" />
@@ -357,6 +358,7 @@
     <ClCompile Include="uef.c" />
     <ClCompile Include="uservia.c" />
     <ClCompile Include="vdfs.c" />
+    <ClCompile Include="vgm.c" />
     <ClCompile Include="via.c" />
     <ClCompile Include="vidalleg.c" />
     <ClCompile Include="video.c" />

@@ -65,6 +65,7 @@
 #include "x86_tube.h"
 #include "z80.h"
 #include "sprow.h"
+#include "vgm.h"
 
 #undef printf
 
@@ -668,6 +669,7 @@ void main_run()
                 break;
             case ALLEGRO_EVENT_TIMER:
                 main_timer(&event);
+                vgm_log_sound(&vgm_rec);
                 break;
             case ALLEGRO_EVENT_MENU_CLICK:
                 main_pause("menu active");
