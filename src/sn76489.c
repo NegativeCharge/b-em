@@ -171,10 +171,8 @@ void sn_write(uint8_t data)
 
         if (vgm_rec.rec_started && vgm_rec.vgmpos != 1024)
         {
-            int rec_pos = vgm_rec.vgmpos;
-            vgm_rec.vgmdat[rec_pos++] = 0x50;
-            vgm_rec.vgmdat[rec_pos++] = data;
-            vgm_rec.vgmpos = rec_pos;
+            vgm_rec.vgmdat[vgm_rec.vgmpos++] = 0x50;
+            vgm_rec.vgmdat[vgm_rec.vgmpos++] = data;
         }
 
         if (data & 0x80)
