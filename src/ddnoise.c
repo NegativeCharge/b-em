@@ -86,7 +86,7 @@ void ddnoise_close()
         }
         if ((smpi = seeksmp[c][1])) {
             if (smpi != smpo)
-                al_destroy_sample(smpo);
+               al_destroy_sample(smpi);
             seeksmp[c][1] = NULL;
         }
     }

@@ -752,7 +752,7 @@ static void scan_attr(vdfs_entry *ent)
     ent->attribs = attribs;
 }
 
-static const char c_esc_bin[] = "\a\b\e\f\n\r\t\v\\\"";
+static const char c_esc_bin[] = "\a\b\f\n\r\t\v\\\"";
 static const char c_esc_asc[] = "abefnrtv\\\"";
 
 static const char *scan_inf_start(vdfs_entry *ent, char inf_line[MAX_INF_LINE])
@@ -1413,7 +1413,7 @@ static vdfs_entry *find_entry_adfs(const vdfs_path *path, vdfs_findres *res, vdf
     for (const char *fn_src = path->path;;) {
         char *fn_ptr = res->acorn_fn;
         char *fn_end = fn_ptr + MAX_FILE_NAME;
-        int ch;
+        int ch = -1;
         while (path_len--) {
             ch = *fn_src++;
             if (ch == '.')

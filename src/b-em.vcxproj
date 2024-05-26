@@ -21,14 +21,14 @@
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <CharacterSet>Unicode</CharacterSet>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -61,6 +61,17 @@
     <Allegro_AddonImage>true</Allegro_AddonImage>
     <Allegro_AddonPrimitives>true</Allegro_AddonPrimitives>
     <OutDir>$(SolutionDir)</OutDir>
+    <Allegro_AddonTTF>true</Allegro_AddonTTF>
+    <Allegro_AddonPhysfs>true</Allegro_AddonPhysfs>
+    <Allegro_AddonMemfile>true</Allegro_AddonMemfile>
+    <Allegro_AddonColor>true</Allegro_AddonColor>
+    <Allegro_AddonVideo>true</Allegro_AddonVideo>
+  </PropertyGroup>
+  <PropertyGroup Label="Vcpkg" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <VcpkgUseStatic>true</VcpkgUseStatic>
+  </PropertyGroup>
+  <PropertyGroup Label="Vcpkg">
+    <VcpkgEnableManifest>false</VcpkgEnableManifest>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -77,7 +88,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>zlib.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\packages\AllegroDeps.1.11.0\build\native\v141\win32\deps\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>..\packages\Allegro.5.2.6\build\native\v142\win32\lib;D:\source\repos\b-em-vgm\b-em\packages\AllegroDeps.1.11.0\build\native\v142\win32\deps\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -102,7 +113,7 @@
       <AdditionalDependencies>zlib.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>MSVCRTD.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <IgnoreAllDefaultLibraries>false</IgnoreAllDefaultLibraries>
-      <AdditionalLibraryDirectories>..\packages\AllegroDeps.1.11.0\build\native\v141\win32\deps\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>..\packages\Allegro.5.2.6\build\native\v142\win32\lib;D:\source\repos\b-em-vgm\b-em\packages\AllegroDeps.1.11.0\build\native\v142\win32\deps\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -172,9 +183,12 @@
     <ClInclude Include="mc6809nc\mc6809_dis.h" />
     <ClInclude Include="mem.h" />
     <ClInclude Include="midi.h" />
+    <ClInclude Include="mmb.h" />
     <ClInclude Include="mmccard.h" />
     <ClInclude Include="model.h" />
     <ClInclude Include="mouse.h" />
+    <ClInclude Include="musahi\m68kcpu.h" />
+    <ClInclude Include="musahi\m68kops.h" />
     <ClInclude Include="music2000.h" />
     <ClInclude Include="music4000.h" />
     <ClInclude Include="music5000.h" />
@@ -281,14 +295,19 @@
     <ClCompile Include="logging.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="map.c" />
+    <ClCompile Include="mc68000tube.c" />
     <ClCompile Include="mc6809nc\mc6809nc.c" />
     <ClCompile Include="mc6809nc\mc6809_debug.c" />
     <ClCompile Include="mc6809nc\mc6809_dis.c" />
     <ClCompile Include="mem.c" />
     <ClCompile Include="midi-windows.c" />
+    <ClCompile Include="mmb.c" />
     <ClCompile Include="mmccard.c" />
     <ClCompile Include="model.c" />
     <ClCompile Include="mouse.c" />
+    <ClCompile Include="musahi\m68kcpu.c" />
+    <ClCompile Include="musahi\m68kdasm.c" />
+    <ClCompile Include="musahi\m68kops.c" />
     <ClCompile Include="music2000.c" />
     <ClCompile Include="music4000.c" />
     <ClCompile Include="music5000.c" />
@@ -351,6 +370,7 @@
   <ItemGroup>
     <None Include="b-em.ico" />
     <None Include="packages.config" />
+    <None Include="tubehost.asm" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

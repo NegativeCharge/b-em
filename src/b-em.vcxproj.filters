@@ -375,6 +375,15 @@
     <ClInclude Include="fullscreen.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="mmb.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="musahi\m68kops.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="musahi\m68kcpu.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="b-em.rc">
@@ -730,11 +739,29 @@
     <ClCompile Include="fullscreen.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="mmb.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="mc68000tube.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="musahi\m68kops.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="musahi\m68kcpu.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="musahi\m68kdasm.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="b-em.ico">
       <Filter>Source Files</Filter>
     </None>
     <None Include="packages.config" />
+    <None Include="tubehost.asm">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
 </Project>
