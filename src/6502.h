@@ -10,14 +10,25 @@ extern PREG p;
 
 extern int output;
 extern int interrupt;
+/* Bit fields for interrupt
+ * Bit  0 (01): System VIA
+ * Bit  1 (02): User VIA
+ * Bit  2 (04): ACIA
+ * Bit  3 (08): TUBE
+ * Bit  4 (10): SCSI
+ * Bit  5 (20):
+ * Bit  6 (40):
+ * Bit  7 (80): Sys VIA T2 special case
+ */
 extern int nmi;
 
+extern uint64_t stopwatch;
 extern int romsel;
 extern uint8_t ram1k, ram4k, ram8k;
 
 void m6502_reset(void);
-void m6502_exec(void);
-void m65c02_exec(void);
+void m6502_exec(int slice);
+void m65c02_exec(int slice);
 void dumpregs(void);
 void m6502_update_swram(void);
 

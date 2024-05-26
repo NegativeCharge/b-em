@@ -18,7 +18,7 @@ typedef enum
 
 typedef struct
 {
-    char name[8];
+    char name[10];
     void (*func)(void);
 } rom_setup_t;
 
@@ -37,6 +37,7 @@ typedef struct
     uint8_t os01:1;
     uint8_t compact:1;
     uint8_t integra:1;
+    uint8_t boot_logo;
     int tube;
 } MODEL;
 
@@ -49,17 +50,24 @@ typedef struct
     bool (*init)(void *rom);
     void (*reset)(void);
     cpu_debug_t *debug;
-    int  rom_size;
-    char bootrom[16];
-    int  speed_multiplier;
-} TUBE;
+} TUBE_CPU;
 
-#define NUM_TUBES 12
-extern TUBE tubes[NUM_TUBES];
+typedef struct
+{
+    const TUBE_CPU *cpu;
+    const char *cfgsect;
+    const char *name;
+    uint_least32_t rom_size;
+    const char *bootrom;
+    int  speed_multiplier;
+} TUBE_MODEL;
+
+extern TUBE_MODEL *tubes;
+extern int num_tubes;
 
 extern int curmodel, curtube, oldmodel, selecttube;
 extern fdc_type_t fdc_type;
-extern bool BPLUS, x65c02, MASTER, MODELA, OS01, compactcmos, integra;
+extern bool BPLUS, x65c02, MASTER, MODELA, OS01, compactcmos, integra, weramrom;
 
 void model_loadcfg(void);
 void model_check(void);

@@ -15,7 +15,6 @@ struct acia {
     void *udata;
 };
 
-void acia_reset(ACIA *acia);
 uint8_t acia_read(ACIA *acia, uint16_t addr);
 void acia_write(ACIA *acia, uint16_t addr, uint8_t val);
 void acia_poll(ACIA *acia);
@@ -26,5 +25,7 @@ void acia_loadstate(ACIA *acia, FILE *f);
 
 void acia_dcdhigh(ACIA *acia);
 void acia_dcdlow(ACIA *acia);
+void acia_ctson(ACIA *acia);
+void acia_ctsoff(ACIA *acia);
 
 #endif

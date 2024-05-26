@@ -20,8 +20,8 @@
  *     0x8000 -> 0xafff - short sideways bank.
  *
  * Master:
- *     0x8000 -> 0x8fff - high VDU workspace (mapped at 0x8000).
- *     0x9000 -> 0xffff - filing system RAM  (mapped at 0xc000).
+ *     0x8000 -> 0x8fff - 4K high VDU workspace (mapped at 0x8000).
+ *     0x9000 -> 0xafff - 8K filing system RAM  (mapped at 0xc000).
  *
  * Integra:
  *     0x8000 -> 0x83ff - 1K bank at 0x8000.
@@ -171,6 +171,53 @@ static void cfg_load_rom(int slot, const char *sect) {
     }
 }
 
+static bool mem_load_batback(int slot)
+{
+    bool worked = false;
+    char name[16];
+    snprintf(name, sizeof(name), "model%02dram%02d", curmodel, slot);
+    ALLEGRO_PATH *path = find_cfg_file(name, ".bin");
+    if (path) {
+        const char *cpath = al_path_cstr(path, ALLEGRO_NATIVE_PATH_SEP);
+        FILE *fp = fopen(cpath, "rb");
+        if (fp) {
+            if (fread(rom + (slot * ROM_SIZE), ROM_SIZE, 1, fp) == 1) {
+                log_debug("mem: battery backed slot %d loaded from %s", slot, cpath);
+                worked = true;
+            }
+            else
+                log_error("mem: unable to restore battery backed slot %d from file %s: %s", slot, cpath, strerror(errno));
+            fclose(fp);
+        }
+        al_destroy_path(path);
+    }
+    return worked;
+}
+
+static void mem_save_batback(int slot)
+{
+    char name[16];
+    snprintf(name, sizeof(name), "model%02dram%02d", curmodel, slot);
+    ALLEGRO_PATH *path = find_cfg_dest(name, ".bin");
+    if (path) {
+        const char *cpath = al_path_cstr(path, ALLEGRO_NATIVE_PATH_SEP);
+        FILE *fp = fopen(cpath, "wb");
+        if (fp) {
+            uint8_t *base = rom + (slot * ROM_SIZE);
+            if (fwrite(base, ROM_SIZE, 1, fp) == 1)
+                log_debug("mem: battery backed slot %d saved to %s", slot, cpath);
+            else
+                log_error("mem: unable to save battery-backed RAM bank %d: failed writing to %s: %s", slot, cpath, strerror(errno));
+            fclose(fp);
+        }
+        else
+            log_error("unable to save battery-backed RAM bank %d: unable to open %s for writing: %s", slot, cpath, strerror(errno));
+        al_destroy_path(path);
+    }
+    else
+        log_error("unable to save battery-backed RAM bank %d: no suitable destination", slot);
+}
+
 void mem_romsetup_os01() {
     const char *sect = models[curmodel].cfgsect;
     char *name, *path;
@@ -231,6 +278,15 @@ void mem_romsetup_bp128(void) {
     rom_slots[0].swram = 1;
 }
 
+void mem_romsetup_compact(void)
+{
+    mem_romsetup_std();
+    rom_slots[7].swram = 1;
+    rom_slots[6].swram = 1;
+    rom_slots[5].swram = 1;
+    rom_slots[4].swram = 1;
+}
+
 void mem_romsetup_master(void) {
     const char *sect = models[curmodel].cfgsect;
     const char *osname, *cpath;
@@ -272,6 +328,29 @@ void mem_romsetup_master(void) {
     exit(1);
 }
 
+void mem_romsetup_weramrom(void) {
+    const char *sect = models[curmodel].cfgsect;
+
+    load_os_rom(sect);
+    cfg_load_rom(15, sect);
+    if (!mem_load_batback(14))
+        cfg_load_rom(14, sect);
+    for (int slot = 13; slot >= 0; --slot)
+        cfg_load_rom(slot, sect);
+
+    rom_slots[14].backed = 1;
+    rom_slots[14].swram = 1;
+    rom_slots[7].swram = 1;
+    rom_slots[6].swram = 1;
+    rom_slots[5].swram = 1;
+    rom_slots[4].swram = 1;
+    rom_slots[3].swram = 1;
+    rom_slots[2].swram = 1;
+    rom_slots[1].swram = 1;
+    rom_slots[0].swram = 1;
+    weramrom = true;
+}
+
 int mem_findswram(int n) {
     int c;
 
@@ -284,6 +363,7 @@ int mem_findswram(int n) {
 
 static void rom_clearmeta(int slot) {
     rom_free(slot);
+    rom_slots[slot].split = 0xc0;
     rom_slots[slot].locked = 0;
     rom_slots[slot].use_name = 0;
     rom_slots[slot].alloc = 0;
@@ -305,6 +385,7 @@ void mem_clearroms(void) {
     for (slot = 0; slot < ROM_NSLOT; slot++) {
         rom_clearmeta(slot);
         rom_slots[slot].swram = 0;
+        rom_slots[slot].backed = 0;
     }
 }
 
@@ -350,6 +431,116 @@ void mem_save_romcfg(const char *sect) {
                 al_set_config_value(bem_cfg, sect, slotkeys[slot], value);
             else
                 al_remove_config_key(bem_cfg, sect, slotkeys[slot]);
+            if (slotp->backed)
+                mem_save_batback(slot);
         }
+    }
+}
+
+enum mem_jim_sz mem_jim_size = JIM_NONE;
+static uint32_t mem_jim_max = 0;
+static uint8_t *mem_jim_data = NULL;
+static uint32_t mem_jim_page;
+
+static const uint32_t mem_jim_sizes[6] = {
+    0,
+    0x1000000,
+    0x4000000,
+    0x10000000,
+    0x1e000000,
+    0x3e000000
+};
+
+void mem_jim_setsize(enum mem_jim_sz size)
+{
+    if (size != mem_jim_size) {
+        uint32_t nmax = mem_jim_sizes[size];
+        log_debug("mem: new jim size %d=%d bytes", size, nmax);
+        if (nmax == 0) {
+            free(mem_jim_data);
+            mem_jim_size = size;
+            mem_jim_max = nmax;
+            mem_jim_data = NULL;
+        }
+        else {
+            uint8_t *njim = realloc(mem_jim_data, nmax);
+            if (njim) {
+                mem_jim_size = size;
+                mem_jim_max = nmax;
+                mem_jim_data = njim;
+            }
+            else
+                log_error("mem: out of memory allocating JIM expansion RAM");
+        }
+    }
+}
+
+uint8_t mem_jim_getsize(void)
+{
+    uint8_t m16 = mem_jim_max >> 24;
+    log_debug("mem: get jim size, max=%08X, returns %d", mem_jim_max, m16);
+    return m16;
+}
+
+uint8_t mem_jim_read(uint16_t addr)
+{
+    uint32_t full_addr = mem_jim_page | (addr & 0xff);
+    if (full_addr < mem_jim_max)
+        return mem_jim_data[full_addr];
+    return addr >> 8;
+}
+
+void mem_jim_write(uint16_t addr, uint8_t value)
+{
+    if (addr >= 0xfd00) {
+        uint32_t full_addr = mem_jim_page | (addr & 0xff);
+        if (full_addr < mem_jim_max)
+            mem_jim_data[full_addr] = value;
+    }
+    else if (addr == 0xfcff)
+        mem_jim_page = (mem_jim_page & 0xffff0000) | (value << 8);
+    else if (addr == 0xfcfe)
+        mem_jim_page = (mem_jim_page & 0xff00ff00) | (value << 16);
+    else if (addr == 0xfcfd)
+        mem_jim_page = (mem_jim_page & 0x00ffff00) | (value << 24);
+}
+
+void mem_jim_savez(ZFILE *zfp)
+{
+    unsigned char buf[7];
+    buf[0] = mem_jim_max & 0xff;
+    buf[1] = (mem_jim_max >> 8) & 0xff;
+    buf[2] = (mem_jim_max >> 16) & 0xff;
+    buf[3] = (mem_jim_max >> 24) & 0xff;
+    buf[4] = (mem_jim_page >> 8) & 0xff;
+    buf[5] = (mem_jim_page >> 16) & 0xff;
+    buf[6] = (mem_jim_page >> 24) & 0xff;
+    savestate_zwrite(zfp, buf, sizeof(buf));
+    if (mem_jim_max > 0)
+        savestate_zwrite(zfp, mem_jim_data, mem_jim_max);
+}
+
+extern void mem_jim_loadz(ZFILE *zfp)
+{
+    unsigned char buf[7];
+    savestate_zread(zfp, buf, sizeof(buf));
+    size_t nsize = buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24);
+    if (mem_jim_data)
+        free(mem_jim_data);
+    mem_jim_data = NULL;
+    mem_jim_max = 0;
+    mem_jim_size = JIM_NONE;
+    if (nsize > 0) {
+        uint8_t *njim = malloc(nsize);
+        if (njim) {
+            mem_jim_data = njim;
+            mem_jim_max = nsize;
+            while (mem_jim_size < JIM_INVALID && nsize != mem_jim_sizes[mem_jim_size])
+                ++mem_jim_size;
+            mem_jim_page = (buf[4] << 8) | (buf[5] << 16) | (buf[6] << 24);
+            savestate_zread(zfp, njim, nsize);
+        }
+        else
+            log_warn("mem: out of memory restoring JIM from savefile");
     }
 }

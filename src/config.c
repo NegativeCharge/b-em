@@ -8,9 +8,12 @@
 #include "disc.h"
 #include "keyboard.h"
 #include "main.h"
+#include "mem.h"
+#include "mmb.h"
 #include "model.h"
 #include "mouse.h"
 #include "mmccard.h"
+#include "music5000.h"
 #include "ide.h"
 #include "midi.h"
 #include "scsi.h"
@@ -32,34 +35,45 @@ ALLEGRO_CONFIG *bem_cfg;
 
 int get_config_int(const char *sect, const char *key, int ival)
 {
-    const char *str;
-
-    if (bem_cfg) {
-        if ((str = al_get_config_value(bem_cfg, sect, key)))
-            ival = atoi(str);
-        else if (sect && (str = al_get_config_value(bem_cfg, NULL, key))) {
-            ival = atoi(str);
+    const char *str = al_get_config_value(bem_cfg, sect, key);
+    if (!str && sect) {
+        if ((str = al_get_config_value(bem_cfg, NULL, key)))
             al_remove_config_key(bem_cfg, "", key);
-        }
+    }
+    if (str) {
+        char *end;
+        long nval = strtol(str, &end, 0);
+        if (end > str && !end[0])
+            ival = nval;
+        else if (sect)
+            log_warn("config: section '%s', key '%s': invalid integer %s", sect, key, str);
+        else
+            log_warn("config: global section, key '%s': invalid integer %s", key, str);
     }
     return ival;
 }
 
-static bool parse_bool(const char *value)
-{
-    return strcasecmp(value, "true") == 0 || strcasecmp(value, "yes") == 0 || atoi(value) > 0;
-}
-
 bool get_config_bool(const char *sect, const char *key, bool bval)
 {
-    const char *str;
-
-    if (bem_cfg) {
-        if ((str = al_get_config_value(bem_cfg, sect, key)))
-            bval = parse_bool(str);
-        else if (sect && (str = al_get_config_value(bem_cfg, NULL, key))) {
-            bval = parse_bool(str);
+    const char *str = al_get_config_value(bem_cfg, sect, key);
+    if (!str && sect) {
+        if ((str = al_get_config_value(bem_cfg, NULL, key)))
             al_remove_config_key(bem_cfg, "", key);
+    }
+    if (str) {
+        if (strcasecmp(str, "true") == 0 || strcasecmp(str, "yes") == 0)
+            bval = true;
+        else if (strcasecmp(str, "false") == 0 || strcasecmp(str, "no") == 0)
+            bval = false;
+        else {
+            char *end;
+            long nval = strtol(str, &end, 0);
+            if (end > str && !end[0])
+                bval = (nval > 0);
+            else if (sect)
+                log_warn("config: section '%s', key '%s': invalid boolean %s", sect, key, str);
+            else
+                log_warn("config: global section, key '%s': invalid boolean %s", key, str);
         }
     }
     return bval;
@@ -67,39 +81,34 @@ bool get_config_bool(const char *sect, const char *key, bool bval)
 
 const char *get_config_string(const char *sect, const char *key, const char *sval)
 {
-    const char *str;
-
-    if (bem_cfg) {
-        if ((str = al_get_config_value(bem_cfg, sect, key)))
-            sval = str;
-        else if (sect && (str = al_get_config_value(bem_cfg, NULL, key))) {
-            al_set_config_value(bem_cfg, sect, key, str);
-            al_remove_config_key(bem_cfg, "", key);
-            sval = al_get_config_value(bem_cfg, sect, key);
-        }
+    const char *str = al_get_config_value(bem_cfg, sect, key);
+    if (str)
+        sval = str;
+    else if (sect && (str = al_get_config_value(bem_cfg, NULL, key))) {
+        al_set_config_value(bem_cfg, sect, key, str);
+        al_remove_config_key(bem_cfg, "", key);
+        sval = al_get_config_value(bem_cfg, sect, key);
     }
     return sval;
 }
 
 ALLEGRO_COLOR get_config_colour(const char *sect, const char *key, ALLEGRO_COLOR cdefault)
 {
-    if (bem_cfg) {
-        const char *str = al_get_config_value(bem_cfg, sect, key);
-        if (str) {
-            if (*str == '#') {
-                unsigned long col = strtoul(str+1, NULL, 16);
-                unsigned r = (col >> 16) & 0xff;
-                unsigned g = (col >> 8) & 0xff;
-                unsigned b = col & 0xff;
-                log_debug("config: get_config_colour, sect=%s, key=%s, hex, r=%u, g=%u, b=%u", sect, key, r, g, b);
+    const char *str = al_get_config_value(bem_cfg, sect, key);
+    if (str) {
+        if (*str == '#') {
+            unsigned long col = strtoul(str+1, NULL, 16);
+            unsigned r = (col >> 16) & 0xff;
+            unsigned g = (col >> 8) & 0xff;
+            unsigned b = col & 0xff;
+            log_debug("config: get_config_colour, sect=%s, key=%s, hex, r=%u, g=%u, b=%u", sect, key, r, g, b);
+            return al_map_rgb(r, g, b);
+        }
+        else {
+            unsigned r, g, b;
+            if (sscanf(str, "%u,%u,%u", &r, &g, &b) == 3) {
+                log_debug("config: get_config_colour, sect=%s, key=%s, decimal, r=%u, g=%u, b=%u", sect, key, r, g, b);
                 return al_map_rgb(r, g, b);
-            }
-            else {
-                unsigned r, g, b;
-                if (sscanf(str, "%u,%u,%u", &r, &g, &b) == 3) {
-                    log_debug("config: get_config_colour, sect=%s, key=%s, decimal, r=%u, g=%u, b=%u", sect, key, r, g, b);
-                    return al_map_rgb(r, g, b);
-                }
             }
         }
     }
@@ -116,42 +125,44 @@ void config_load(void)
         cpath = al_path_cstr(path, ALLEGRO_NATIVE_PATH_SEP);
         if (bem_cfg)
             al_destroy_config(bem_cfg);
-        if (!(bem_cfg = al_load_config_file(cpath)))
-            log_warn("config: unable to load config file '%s', using defaults", cpath);
+        if (!(bem_cfg = al_load_config_file(cpath))) {
+            log_fatal("config: unable to load config file '%s'", cpath);
+            exit(1);
+        }
         al_destroy_path(path);
-    } else
-        log_warn("config: no config file found, using defaults");
-
-    if (bem_cfg) {
-        if ((p = get_config_string("disc", "disc0", NULL))) {
-            if (discfns[0])
-                al_destroy_path(discfns[0]);
-            discfns[0] = al_create_path(p);
-        }
-        if ((p = get_config_string("disc", "disc1", NULL))) {
-            if (discfns[1])
-                al_destroy_path(discfns[1]);
-            discfns[1] = al_create_path(p);
-        }
-        if ((p = get_config_string("disc", "mmb", NULL))) {
-            if (mmb_fn)
-                free(mmb_fn);
-            mmb_fn = strdup(p);
-        }
-        if ((p = get_config_string("disc", "mmccard", NULL))) {
-            if (mmccard_fn)
-                free(mmccard_fn);
-            mmccard_fn = strdup(p);
-        }
-        if ((p = get_config_string("tape", "tape", NULL))) {
-            if (tape_fn)
-                al_destroy_path(tape_fn);
-            tape_fn = al_create_path(p);
-        }
-        al_remove_config_key(bem_cfg, "", "video_resize");
-        al_remove_config_key(bem_cfg, "", "tube6502speed");
+    }
+    else {
+        log_fatal("config: no config file found");
+        exit(1);
     }
 
+    if ((p = get_config_string("disc", "disc0", NULL))) {
+        if (discfns[0])
+            al_destroy_path(discfns[0]);
+        discfns[0] = al_create_path(p);
+    }
+    if ((p = get_config_string("disc", "disc1", NULL))) {
+        if (discfns[1])
+            al_destroy_path(discfns[1]);
+        discfns[1] = al_create_path(p);
+    }
+    if ((p = get_config_string("disc", "mmb", NULL))) {
+        if (mmb_fn)
+            free(mmb_fn);
+        mmb_fn = strdup(p);
+    }
+    if ((p = get_config_string("disc", "mmccard", NULL))) {
+        if (mmccard_fn)
+            free(mmccard_fn);
+        mmccard_fn = strdup(p);
+    }
+    if ((p = get_config_string("tape", "tape", NULL))) {
+        if (tape_fn)
+            al_destroy_path(tape_fn);
+        tape_fn = al_create_path(p);
+    }
+    al_remove_config_key(bem_cfg, "", "video_resize");
+    al_remove_config_key(bem_cfg, "", "tube6502speed");
     defaultwriteprot = get_config_bool("disc", "defaultwriteprotect", 1);
 
     autopause        = get_config_bool(NULL, "autopause", false);
@@ -168,6 +179,8 @@ void config_load(void)
     sound_tape       = get_config_bool("sound", "sndtape",       false);
     sound_filter     = get_config_bool("sound", "soundfilter",   true);
     sound_paula      = get_config_bool("sound", "soundpaula",    false);
+    music5000_fno    = get_config_int("sound", "music5000_filter", 0);
+    buflen_m5        = get_config_int("sound", "buflen_music5000", BUFLEN_M5);
 
     curwave          = get_config_int("sound", "soundwave",     0);
     sidmethod        = get_config_int("sound", "sidmethod",     0);
@@ -175,6 +188,8 @@ void config_load(void)
 
     ddnoise_vol      = get_config_int("sound", "ddvol",         2);
     ddnoise_type     = get_config_int("sound", "ddtype",        0);
+
+    autoskip         = get_config_bool(NULL, "autoskip",        true);
 
     vid_fullborders  = get_config_int("video", "fullborders",   1);
     vid_win_multiplier = get_config_int("video", "winmultipler", 1);
@@ -203,10 +218,12 @@ void config_load(void)
     keyas            = get_config_bool(NULL, "key_as",        0);
     keylogical       = get_config_bool(NULL, "key_logical",   0);
     keypad           = get_config_bool(NULL, "keypad", false);
-    mouse_amx        = get_config_bool(NULL, "mouse_amx",     0);
-    kbdips           = get_config_int(NULL, "kbdips", 0);
 
-    buflen_m5        = get_config_int("sound", "buflen_music5000", BUFLEN_M5);
+    mem_jim_setsize(get_config_int(NULL, "jim_mem_size", 0));
+
+    mouse_amx        = get_config_bool(NULL, "mouse_amx",     0);
+    mouse_stick      = get_config_bool(NULL, "mouse_stick",   0);
+    kbdips           = get_config_int(NULL, "kbdips", 0);
 
     for (int act = 0; act < KEY_ACTION_MAX; act++) {
         const char *str = al_get_config_value(bem_cfg, "key_actions", keyact_const[act].name);
@@ -243,6 +260,14 @@ void set_config_int(const char *sect, const char *key, int value)
     char buf[11];
 
     snprintf(buf, sizeof buf, "%d", value);
+    al_set_config_value(bem_cfg, sect, key, buf);
+}
+
+void set_config_hex(const char *sect, const char *key, unsigned value)
+{
+    char buf[11];
+
+    snprintf(buf, sizeof buf, "0x%x", value);
     al_set_config_value(bem_cfg, sect, key, buf);
 }
 
@@ -309,14 +334,17 @@ void config_save(void)
         set_config_bool("sound", "sndtape",     sound_tape);
         set_config_bool("sound", "soundfilter", sound_filter);
         set_config_bool("sound", "soundpaula",  sound_paula);
+        set_config_int("sound", "music5000_filter", music5000_fno);
+        set_config_int("sound", "buflen_music5000", buflen_m5);
 
         set_config_int("sound", "soundwave", curwave);
         set_config_int("sound", "sidmethod", sidmethod);
         set_config_int("sound", "cursid", cursid);
-        set_config_int("sound", "buflen_music5000", buflen_m5);
 
         set_config_int("sound", "ddvol", ddnoise_vol);
         set_config_int("sound", "ddtype", ddnoise_type);
+
+        set_config_bool(NULL, "autoskip", autoskip);
 
         set_config_int("video", "fullborders", vid_fullborders);
         set_config_int("video", "winmultipler", vid_win_multiplier);
@@ -344,8 +372,10 @@ void config_save(void)
         set_config_bool(NULL, "key_as", keyas);
         set_config_bool(NULL, "key_logical", keylogical);
         set_config_bool(NULL, "keypad", keypad);
+        set_config_int(NULL, "jim_mem_size", mem_jim_size);
 
         set_config_bool(NULL, "mouse_amx", mouse_amx);
+        set_config_bool(NULL, "mouse_stick", mouse_stick);
 
         for (int c = 0; c < KEY_ACTION_MAX; c++) {
             if (keyactions[c].keycode == keyact_const[c].keycode && keyactions[c].altstate == keyact_const[c].altstate)

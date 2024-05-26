@@ -4,6 +4,7 @@
 #define CLOCKS_PER_FRAME 80000
 
 /*CRTC (6845)*/
+
 void    crtc_reset(void);
 void    crtc_write(uint16_t addr, uint8_t val);
 uint8_t crtc_read(uint16_t addr);
@@ -16,6 +17,7 @@ extern int crtc_i;
 
 extern int hc, vc, sc;
 extern uint16_t ma;
+extern uint64_t stopwatch_vblank;
 
 /*Video ULA (VIDPROC)*/
 void videoula_write(uint16_t addr, uint8_t val);

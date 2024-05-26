@@ -14,8 +14,7 @@
 
 struct
 {
-    uint8_t command, oldcmd, sector, track, status, data;
-    uint8_t ctrl;
+    uint8_t command, oldcmd, sector, track, status, data, resetting;
     int curside;
     int curtrack;
     int density;
@@ -35,12 +34,16 @@ static const unsigned step_times[4] = { 6000, 12000, 20000, 30000 };
 
 static int bytenum;
 
-static void short_spindown(void)
+static void wd1770_short_spindown(void)
 {
     motorspin = 15000;
     fdc_time = 0;
 }
 
+void wd1770_setspindown()
+{
+    motorspin = 45000;
+}
 
 void wd1770_spinup()
 {
@@ -54,6 +57,7 @@ void wd1770_spinup()
             if (drives[i].spinup)
                 drives[i].spinup(i);
     }
+    wd1770_setspindown();
 }
 
 static void wd1770_spindown()
@@ -68,11 +72,6 @@ static void wd1770_spindown()
             if (drives[i].spindown)
                 drives[i].spindown(i);
     }
-}
-
-void wd1770_setspindown()
-{
-    motorspin = 45000;
 }
 
 #define track0 (wd1770.curtrack ? 0 : 4)
@@ -92,7 +91,7 @@ static void wd1770_begin_seek(unsigned cmd, const char *cmd_desc, int target)
 
 static int data_count = 0;
 
-static void begin_read_sector(const char *variant)
+static void wd1770_begin_read_sector(const char *variant)
 {
     log_debug("wd1770: %s read sector drive=%d side=%d track=%d sector=%d dens=%d", variant, curdrive, wd1770.curside, wd1770.track, wd1770.sector, wd1770.density);
     data_count = 0;
@@ -102,7 +101,7 @@ static void begin_read_sector(const char *variant)
     bytenum = 0;
 }
 
-static void begin_write_sector(const char *variant)
+static void wd1770_begin_write_sector(const char *variant)
 {
     log_debug("wd1770: %s write sector drive=%d side=%d track=%d sector=%d dens=%d", variant, curdrive, wd1770.curside, wd1770.track, wd1770.sector, wd1770.density);
     wd1770.status = 0x83;
@@ -112,7 +111,7 @@ static void begin_write_sector(const char *variant)
     nmi |= 2;
 }
 
-static void write_1770(uint16_t addr, uint8_t val)
+static void wd1770_write_fdc(uint16_t addr, uint8_t val)
 {
     switch (addr & 0x03)
     {
@@ -158,58 +157,119 @@ static void write_1770(uint16_t addr, uint8_t val)
     }
 }
 
-static void write_ctrl_acorn(uint8_t val)
+static void wd1770_maybe_reset(uint8_t val)
+{
+    if (val)
+        wd1770.resetting = 0;
+    else if (!wd1770.resetting) {
+        wd1770_reset();
+        wd1770.resetting = 1;
+    }
+}
+
+/*
+ * Process the drive selection bits common to the Acorn WD1770
+ * interface in the Master and the Acorn WD1770 interface as used on
+ * the B+ and as a daughter board for the BBC B.
+ */
+
+static void wd1770_wctl_adrive(uint8_t val)
+{
+    curdrive = (val & 0x02) ? 1 : 0;
+    if (motoron) {
+        led_update(LED_DRIVE_0, val & 0x01, 0);
+        led_update(LED_DRIVE_1, val & 0x02, 0);
+    }
+}
+
+/*
+ * Process a write to the control latch for the Acorn WD1770 interface
+ * as fitted to the B+ and as a daughter board for the BBC B.
+ */
+
+static void wd1770_wctl_acorn(uint8_t val)
 {
     log_debug("wd1770: write acorn-style ctrl %02X", val);
-    if (val & 0x20)
-        wd1770_reset();
-    wd1770.ctrl = val;
-    curdrive = (val & 0x02) ? 1 : 0;
-    wd1770.curside =  (wd1770.ctrl & 0x04) ? 1 : 0;
-    wd1770.density = !(wd1770.ctrl & 0x08);
+    wd1770_maybe_reset(val & 0x20);
+    wd1770_wctl_adrive(val);
+    wd1770.curside =  (val & 0x04) ? 1 : 0;
+    wd1770.density = !(val & 0x08);
 }
 
-static void write_ctrl_master(uint8_t val)
+/*
+ * Process a write to the control latch for the Acorn WD1770 interface
+ * as fitted to the BBC Master.
+ */
+
+static void wd1770_wctl_master(uint8_t val)
 {
     log_debug("wd1770: write master-style ctrl %02X", val);
-    if (val & 0x04)
-        wd1770_reset();
-    wd1770.ctrl = val;
-    curdrive = (val & 2) ? 1 : 0;
-    if (motoron) {
-        led_update((curdrive == 0) ? LED_DRIVE_0 : LED_DRIVE_1, true, 0);
-        led_update((curdrive == 0) ? LED_DRIVE_1 : LED_DRIVE_0, false, 0);
-    }
-    wd1770.curside =  (wd1770.ctrl & 0x10) ? 1 : 0;
-    wd1770.density = !(wd1770.ctrl & 0x20);
+    wd1770_maybe_reset(val & 0x04);
+    wd1770_wctl_adrive(val);
+    wd1770.curside =  (val & 0x10) ? 1 : 0;
+    wd1770.density = !(val & 0x20);
 }
 
-static void write_ctrl_opus(uint8_t val)
+/*
+ * Process the drive selection bit common to the non-Acorn WD1770
+ * interfaces.
+ */
+
+static void wd1770_wctl_sdrive(uint8_t val)
+{
+    if (val) {
+        curdrive = 1;
+        if (motoron) {
+            led_update(LED_DRIVE_0, false, 0);
+            led_update(LED_DRIVE_1, true, 0);
+        }
+    }
+    else {
+        curdrive = 0;
+        if (motoron) {
+            led_update(LED_DRIVE_0, true, 0);
+            led_update(LED_DRIVE_1, false, 0);
+        }
+    }
+}
+
+/*
+ * Process a write to the control latch for the Opus WD1770
+ * interface
+ */
+
+static void wd1770_wctl_opus(uint8_t val)
 {
     log_debug("wd1770: write opus-style ctrl %02X", val);
-    wd1770.ctrl = val;
-    curdrive = (val & 0x01);
-    wd1770.curside =  (wd1770.ctrl & 0x02) ? 1 : 0;
-    wd1770.density = (wd1770.ctrl & 0x40);
+    wd1770_wctl_sdrive(val & 0x01);
+    wd1770.curside =  (val & 0x02) ? 1 : 0;
+    wd1770.density = (val & 0x40);
 }
 
-static void write_ctrl_stl(uint8_t val)
+/*
+ * Process a write to the control latch for the Solidisk WD1770
+ * interface.
+ */
+
+static void wd1770_wctl_stl(uint8_t val)
 {
     log_debug("wd1770: write solidisk-style ctrl %02X", val);
-    wd1770.ctrl = val;
-    curdrive = (val & 0x01);
-    wd1770.curside =  (wd1770.ctrl & 0x02) ? 1 : 0;
-    wd1770.density = !(wd1770.ctrl & 0x04);
+    wd1770_wctl_sdrive(val & 0x01);
+    wd1770.curside =  (val & 0x02) ? 1 : 0;
+    wd1770.density = !(val & 0x04);
 }
 
-static void write_ctrl_watford(uint8_t val)
+/*
+ * Process a write to the control latch for the Watford Electronics
+ * WD1770 interface.
+ */
+
+static void wd1770_wctl_watford(uint8_t val)
 {
     log_debug("wd1770: write watford-style ctrl %02X", val);
-    if (val & 0x80)
-        wd1770_reset();
-    wd1770.ctrl = val;
-    curdrive = (val & 0x04) ? 1 : 0;
-    wd1770.curside =  (wd1770.ctrl & 0x02) ? 1 : 0;
+    wd1770_maybe_reset(val & 0x08);
+    wd1770_wctl_sdrive(val & 0x04);
+    wd1770.curside =  (val & 0x02) ? 1 : 0;
     wd1770.density = !(val & 0x01);
 }
 
@@ -223,40 +283,40 @@ void wd1770_write(uint16_t addr, uint8_t val)
         break;
     case FDC_ACORN:
         if (addr & 0x0004)
-            write_1770(addr, val);
+            wd1770_write_fdc(addr, val);
         else
-            write_ctrl_acorn(val);
+            wd1770_wctl_acorn(val);
         break;
     case FDC_MASTER:
         if (addr & 0x0008)
-            write_1770(addr, val);
+            wd1770_write_fdc(addr, val);
         else
-            write_ctrl_master(val);
+            wd1770_wctl_master(val);
         break;
     case FDC_OPUS:
         if (addr & 0x0004)
-            write_ctrl_opus(val);
+            wd1770_wctl_opus(val);
         else
-            write_1770(addr, val);
+            wd1770_write_fdc(addr, val);
         break;
     case FDC_STL:
         if (addr & 0x0004)
-            write_ctrl_stl(val);
+            wd1770_wctl_stl(val);
         else
-            write_1770(addr, val);
+            wd1770_write_fdc(addr, val);
         break;
     case FDC_WATFORD:
         if (addr & 0x0004)
-            write_1770(addr, val);
+            wd1770_write_fdc(addr, val);
         else
-            write_ctrl_watford(val);
+            wd1770_wctl_watford(val);
         break;
     default:
         log_warn("wd1770: write to unrecognised fdc type %d: %04x=%02x\n", fdc_type, addr, val);
     }
 }
 
-static uint8_t read_1770(uint16_t addr)
+static uint8_t wd1770_read_fdc(uint16_t addr)
 {
     switch (addr & 0x03)
     {
@@ -291,20 +351,20 @@ uint8_t wd1770_read(uint16_t addr)
             break;
         case FDC_ACORN:
             if (addr & 0x0004)
-                return read_1770(addr);
+                return wd1770_read_fdc(addr);
             break;
         case FDC_MASTER:
             if (addr & 0x0008)
-                return read_1770(addr);
+                return wd1770_read_fdc(addr);
             break;
         case FDC_OPUS:
             if (!(addr & 0x0004))
-                return read_1770(addr);
+                return wd1770_read_fdc(addr);
             break;
         case FDC_STL:
-            return read_1770(addr);
+            return wd1770_read_fdc(addr);
         case FDC_WATFORD:
-            return read_1770(addr);
+            return wd1770_read_fdc(addr);
         default:
             log_warn("wd1770: read from unrecognised FDC type %d, addr=%04X", fdc_type, addr);
     }
@@ -353,7 +413,7 @@ static void wd1770_cmd_next(unsigned cmd)
                 wd1770_completed();
             else if (wd1770.in_gap) {
                 wd1770.sector++;
-                begin_read_sector("continue multiple");
+                wd1770_begin_read_sector("continue multiple");
             }
             else {
                 log_debug("wd1770: multi-sector read, inter-sector gap");
@@ -367,7 +427,7 @@ static void wd1770_cmd_next(unsigned cmd)
                 wd1770_completed();
             else if (wd1770.in_gap) {
                 wd1770.sector++;
-                begin_write_sector("continue multiple");
+                wd1770_begin_write_sector("continue multiple");
             }
             else {
                 log_debug("wd1770: multi-sector write, inter-sector gap");
@@ -424,19 +484,19 @@ static void wd1770_cmd_start(unsigned cmd)
             break;
 
         case 0x8: /*Read sector*/
-            begin_read_sector("begin single");
+            wd1770_begin_read_sector("begin single");
             break;
 
         case 0x9: /* read multiple sectors*/
-            begin_read_sector("begin multiple");
+            wd1770_begin_read_sector("begin multiple");
             break;
 
         case 0xA: /*Write sector*/
-            begin_write_sector("begin single");
+            wd1770_begin_write_sector("begin single");
             break;
 
         case 0xB: /*write multiple sectors */
-            begin_write_sector("begin multiple");
+            wd1770_begin_write_sector("begin multiple");
             break;
 
         case 0xC: /*Read address*/
@@ -453,14 +513,14 @@ static void wd1770_cmd_start(unsigned cmd)
             break;
 
         case 0xE: /* read track */
-            log_debug("wd1770: read track side=%d track=%d dens=%d, ctrl=%d\n", wd1770.curside, wd1770.track, wd1770.density, wd1770.ctrl);
+            log_debug("wd1770: read track side=%d track=%d dens=%d\n", wd1770.curside, wd1770.track, wd1770.density);
             wd1770.status = 0x83;
             nmi |= 2;
             disc_readtrack(curdrive, wd1770.track, wd1770.curside, wd1770.density);
             break;
 
         case 0xF: /*Write track*/
-            log_debug("wd1770: write track side=%d track=%d dens=%d, ctrl=%d\n", wd1770.curside, wd1770.track, wd1770.density, wd1770.ctrl);
+            log_debug("wd1770: write track side=%d track=%d dens=%d\n", wd1770.curside, wd1770.track, wd1770.density);
             wd1770.status = 0x83;
             nmi |= 2;
             disc_writetrack(curdrive, wd1770.track, wd1770.curside, wd1770.density);
@@ -513,7 +573,7 @@ static void wd1770_fault(uint8_t flags, const char *desc)
     if (nmi_on_completion[fdc_type - FDC_ACORN])
         fdc_time = 200;
     else {
-        short_spindown();
+        wd1770_short_spindown();
         wd1770.status &= 0xfe;
     }
 }
@@ -559,6 +619,7 @@ void wd1770_reset()
     log_debug("wd1770: reset 1770");
     nmi = 0;
     wd1770.status = 0;
+    wd1770.sector = 1;
     motorspin = 0;
     fdc_time = 0;
     if (fdc_type >= FDC_ACORN) {

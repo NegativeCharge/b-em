@@ -8,11 +8,13 @@
 #include "debugger.h"
 #include "ddnoise.h"
 #include "disc.h"
+#include "fullscreen.h"
 #include "joystick.h"
 #include "keyboard.h"
 #include "keydef-allegro.h"
 #include "main.h"
 #include "mem.h"
+#include "mmb.h"
 #include "model.h"
 #include "mouse.h"
 #include "music5000.h"
@@ -24,6 +26,7 @@
 #include "sdf.h"
 #include "sound.h"
 #include "sn76489.h"
+#include "sysacia.h"
 #include "tape.h"
 #include "tapecat-allegro.h"
 #include "tube.h"
@@ -38,6 +41,12 @@
 #endif
 
 #define ROM_LABEL_LEN 50
+
+/* pclose() and popen() on Windows are _pclose() and _popen() */
+#ifdef _WIN32
+#  define pclose _pclose
+#  define popen _popen
+#endif
 
 typedef struct {
     const char *label;
@@ -117,8 +126,10 @@ static ALLEGRO_MENU *create_file_menu(void)
     al_append_menu_item(menu, "Save Screenshot...", IDM_FILE_SCREEN_SHOT, 0, NULL, NULL);
     add_checkbox_item(menu, "Print to file", IDM_FILE_PRINT, print_dest == PDEST_FILE);
     add_checkbox_item(menu, "Print to command", IDM_FILE_PCMD, print_dest == PDEST_PIPE);
-    add_checkbox_item(menu, "Record Music 5000 to file", IDM_FILE_M5000, music5000_fp);
-    add_checkbox_item(menu, "Record Paula to file", IDM_FILE_PAULAREC, paula_fp);
+    add_checkbox_item(menu, "Serial to file", IDM_FILE_SERIAL, sysacia_fp);
+    add_checkbox_item(menu, music5000_rec.prompt, IDM_FILE_M5000, music5000_rec.fp);
+    add_checkbox_item(menu, paula_rec.prompt, IDM_FILE_PAULAREC, paula_rec.fp);
+    add_checkbox_item(menu, sound_rec.prompt, IDM_FILE_SOUNDREC, sound_rec.fp);
     al_append_menu_item(menu, "Exit", IDM_FILE_EXIT, 0, NULL, NULL);
     return menu;
 }
@@ -296,15 +307,17 @@ static ALLEGRO_MENU *create_tube_menu(void)
 {
     ALLEGRO_MENU *menu = al_create_menu();
     ALLEGRO_MENU *sub = al_create_menu();
-    menu_map_t map[NUM_TUBES];
-    int i;
-
-    for (i = 0; i < NUM_TUBES; i++) {
+    menu_map_t *map = malloc(num_tubes * sizeof(menu_map_t));
+    if (!map) {
+        log_error("gui: unable to allocate tube menu");
+        return NULL;
+    }
+    for (int i = 0; i < num_tubes; ++i) {
         map[i].label = tubes[i].name;
         map[i].itemno = i;
     }
-    add_sorted_set(menu, map, NUM_TUBES, IDM_TUBE, curtube);
-    for (i = 0; i < NUM_TUBE_SPEEDS; i++)
+    add_sorted_set(menu, map, num_tubes, IDM_TUBE, curtube);
+    for (int i = 0; i < NUM_TUBE_SPEEDS; i++)
         add_radio_item(sub, tube_speeds[i].name, IDM_TUBE_SPEED, i, tube_speed_num);
     al_append_menu_item(menu, "Tube speed", 0, 0, NULL, sub);
     return menu;
@@ -397,6 +410,7 @@ static ALLEGRO_MENU *create_sid_menu(void)
 static const char *wave_names[] = { "Square", "Saw", "Sine", "Triangle", "SID", NULL };
 static const char *dd_type_names[] = { "5.25\"", "3.5\"", NULL };
 static const char *dd_noise_vols[] = { "33%", "66%", "100%", NULL };
+static const char *filt_freq[] = { "Original (3214Hz)", "16kHz", NULL };
 
 static ALLEGRO_MENU *create_sound_menu(void)
 {
@@ -405,6 +419,9 @@ static ALLEGRO_MENU *create_sound_menu(void)
     add_checkbox_item(menu, "Internal sound chip",   IDM_SOUND_INTERNAL,  sound_internal);
     add_checkbox_item(menu, "BeebSID",               IDM_SOUND_BEEBSID,   sound_beebsid);
     add_checkbox_item(menu, "Music 5000",            IDM_SOUND_MUSIC5000, sound_music5000);
+    sub = al_create_menu();
+    add_radio_set(sub, filt_freq, IDM_SOUND_MFILT, music5000_fno);
+    al_append_menu_item(menu, "Music 5000 Filter", 0, 0, NULL, sub);
     add_checkbox_item(menu, "Paula",                 IDM_SOUND_PAULA,     sound_paula);
     add_checkbox_item(menu, "Printer port DAC",      IDM_SOUND_DAC,       sound_dac);
     add_checkbox_item(menu, "Disc drive noise",      IDM_SOUND_DDNOISE,   sound_ddnoise);
@@ -479,13 +496,55 @@ static ALLEGRO_MENU *create_keyboard_menu(void)
     return menu;
 }
 
-static ALLEGRO_MENU *create_joymap_menu(void)
+static ALLEGRO_MENU *create_joystick_menu(int joystick)
+{
+    ALLEGRO_MENU *menu = al_create_menu();
+    int i;
+
+    for (i = 0; i < joystick_count; i++) if (joystick_names[i])
+        add_checkbox_item(menu, joystick_names[i], menu_id_num(IDM_JOYSTICK + joystick, i), i == joystick_index[joystick]);
+    return menu;
+}
+
+static ALLEGRO_MENU *create_joymap_menu(int joystick)
 {
     ALLEGRO_MENU *menu = al_create_menu();
     int i;
 
     for (i = 0; i < joymap_count; i++)
-        add_checkbox_item(menu, joymaps[i].name, menu_id_num(IDM_JOYMAP, i), i == joymap_num);
+        add_checkbox_item(menu, joymaps[i].name, menu_id_num(IDM_JOYMAP + joystick, i), i == joymap_index[joystick]);
+    return menu;
+}
+
+static ALLEGRO_MENU *create_joysticks_menu(void)
+{
+    ALLEGRO_MENU *menu = al_create_menu();
+    add_checkbox_item(menu, "Tricky SEGA Adapter", IDM_TRIACK_SEGA_ADAPTER, autopause);
+    al_append_menu_item(menu, "Joystick", 0, 0, NULL, create_joystick_menu(0));
+    al_append_menu_item(menu, "Joystick Map", 0, 0, NULL, create_joymap_menu(0));
+    if (joystick_count > 1) {
+        al_append_menu_item(menu, "Joystick 2", 0, 0, NULL, create_joystick_menu(1));
+        al_append_menu_item(menu, "Joystick 2 Map", 0, 0, NULL, create_joymap_menu(1));
+    }
+    return menu;
+}
+
+
+static const char *jim_sizes[] =
+{
+    "None (disabled)",
+    "16M",
+    "64M",
+    "256M",
+    "480M",
+    "996M",
+    NULL
+};
+
+static ALLEGRO_MENU *create_jim_menu(void)
+{
+    ALLEGRO_MENU *menu = al_create_menu();
+    add_radio_set(menu, jim_sizes, IDM_JIM_SIZE, mem_jim_size);
     return menu;
 }
 
@@ -498,10 +557,12 @@ static ALLEGRO_MENU *create_settings_menu(void)
     al_append_menu_item(menu, "MIDI", 0, 0, NULL, create_midi_menu());
 #endif
     al_append_menu_item(menu, "Keyboard", 0, 0, NULL, create_keyboard_menu());
+    al_append_menu_item(menu, "Jim Memory", 0, 0, NULL, create_jim_menu());
     add_checkbox_item(menu, "Auto-Pause", IDM_AUTO_PAUSE, autopause);
     add_checkbox_item(menu, "Mouse (AMX)", IDM_MOUSE_AMX, mouse_amx);
-    if (joymap_count > 0)
-        al_append_menu_item(menu, "Joystick Map", 0, 0, NULL, create_joymap_menu());
+    if (joystick_count > 0)
+        al_append_menu_item(menu, "Joysticks", 0, 0, NULL, create_joysticks_menu());
+    add_checkbox_item(menu, "Joystick Mouse", IDM_MOUSE_STICK, mouse_stick);
     return menu;
 }
 
@@ -511,9 +572,10 @@ static ALLEGRO_MENU *create_speed_menu(void)
 
     ALLEGRO_MENU *menu = al_create_menu();
     add_radio_item(menu, "Paused", IDM_SPEED, EMU_SPEED_PAUSED, emuspeed);
-    for (i = 0; i < NUM_EMU_SPEEDS; i++)
+    for (i = 0; i < num_emu_speeds; i++)
         add_radio_item(menu, emu_speeds[i].name, IDM_SPEED, i, emuspeed);
     add_radio_item(menu, "Full-speed", IDM_SPEED, EMU_SPEED_FULL, emuspeed);
+    add_checkbox_item(menu, "Auto Frameskip", IDM_AUTOSKIP, autoskip);
     return menu;
 }
 
@@ -543,6 +605,12 @@ void gui_allegro_init(ALLEGRO_EVENT_QUEUE *queue, ALLEGRO_DISPLAY *display)
     al_register_event_source(queue, al_get_default_menu_event_source());
 }
 
+void gui_allegro_destroy(ALLEGRO_EVENT_QUEUE *queue, ALLEGRO_DISPLAY *display)
+{
+    al_unregister_event_source(queue, al_get_default_menu_event_source());
+    al_set_display_menu(display, NULL);
+}
+
 static int radio_event_simple(ALLEGRO_EVENT *event, int current)
 {
     int id = menu_get_id(event);
@@ -550,6 +618,19 @@ static int radio_event_simple(ALLEGRO_EVENT *event, int current)
     ALLEGRO_MENU *menu = (ALLEGRO_MENU *)(event->user.data3);
 
     al_set_menu_item_flags(menu, menu_id_num(id, current), ALLEGRO_MENU_ITEM_CHECKBOX);
+    return num;
+}
+
+static int radio_event_with_deselect(ALLEGRO_EVENT *event, int current)
+{
+    int id = menu_get_id(event);
+    int num = menu_get_num(event);
+    ALLEGRO_MENU *menu = (ALLEGRO_MENU *)(event->user.data3);
+
+    if (num == current)
+        num = -1;
+    else
+        al_set_menu_item_flags(menu, menu_id_num(id, current), ALLEGRO_MENU_ITEM_CHECKBOX);
     return num;
 }
 
@@ -672,41 +753,41 @@ static void file_print_pipe(ALLEGRO_EVENT *event)
     }
 }
 
-static void m5000_rec(ALLEGRO_EVENT *event)
+static void serial_rec(ALLEGRO_EVENT *event)
 {
     ALLEGRO_FILECHOOSER *chooser;
     ALLEGRO_DISPLAY *display;
 
-    if (music5000_fp)
-        music5000_rec_stop();
-    else if ((chooser = al_create_native_file_dialog(savestate_name, "Record Music 5000 to file", "*.wav", ALLEGRO_FILECHOOSER_SAVE))) {
+    if (sysacia_fp)
+        sysacia_rec_stop();
+    else if ((chooser = al_create_native_file_dialog(savestate_name, "Record serial to file", "*.txt", ALLEGRO_FILECHOOSER_SAVE))) {
         display = (ALLEGRO_DISPLAY *)(event->user.data2);
         while (al_show_native_file_dialog(display, chooser)) {
             if (al_get_native_file_dialog_count(chooser) <= 0)
                 break;
-            if (music5000_rec_start(al_get_native_file_dialog_path(chooser, 0)))
+            if (sysacia_rec_start(al_get_native_file_dialog_path(chooser, 0)))
                 break;
         }
         al_destroy_native_file_dialog(chooser);
     }
 }
 
-static void paula_rec(ALLEGRO_EVENT *event)
+static void toggle_record(ALLEGRO_EVENT *event, sound_rec_t *rec)
 {
-    ALLEGRO_FILECHOOSER *chooser;
-    ALLEGRO_DISPLAY *display;
-
-    if (paula_fp)
-        paula_rec_stop();
-    else if ((chooser = al_create_native_file_dialog(savestate_name, "Record Paula to file", "*.wav", ALLEGRO_FILECHOOSER_SAVE))) {
-        display = (ALLEGRO_DISPLAY *)(event->user.data2);
-        while (al_show_native_file_dialog(display, chooser)) {
-            if (al_get_native_file_dialog_count(chooser) <= 0)
-                break;
-            if (paula_rec_start(al_get_native_file_dialog_path(chooser, 0)))
-                break;
+    if (rec->fp)
+        sound_stop_rec(rec);
+    else {
+        ALLEGRO_FILECHOOSER *chooser = al_create_native_file_dialog(savestate_name, rec->prompt, "*.wav", ALLEGRO_FILECHOOSER_SAVE);
+        if (chooser) {
+            ALLEGRO_DISPLAY *display = (ALLEGRO_DISPLAY *)(event->user.data2);
+            while (al_show_native_file_dialog(display, chooser)) {
+                if (al_get_native_file_dialog_count(chooser) <= 0)
+                    break;
+                if (sound_start_rec(rec, al_get_native_file_dialog_path(chooser, 0)))
+                    break;
+            }
+            al_destroy_native_file_dialog(chooser);
         }
-        al_destroy_native_file_dialog(chooser);
     }
 }
 
@@ -963,8 +1044,10 @@ static void disc_vdfs_root(ALLEGRO_EVENT *event)
     if ((chooser = al_create_native_file_dialog(vdfs_get_root(), "Choose a folder to be the VDFS root", "*", ALLEGRO_FILECHOOSER_FOLDER))) {
         display = (ALLEGRO_DISPLAY *)(event->user.data2);
         if (al_show_native_file_dialog(display, chooser)) {
-            if (al_get_native_file_dialog_count(chooser) > 0)
+            if (al_get_native_file_dialog_count(chooser) > 0) {
                 vdfs_set_root(al_get_native_file_dialog_path(chooser, 0));
+                config_save();
+            }
         }
     }
 }
@@ -1137,6 +1220,18 @@ static void change_mode7_font(ALLEGRO_EVENT *event)
         mode7_font_index = newix;
 }
 
+static void toggle_music5000(void)
+{
+    if (sound_music5000) {
+        sound_music5000 = false;
+        music5000_close();
+    }
+    else {
+        sound_music5000 = true;
+        music5000_init(emuspeed);
+    }
+}    
+
 static const char all_dext[] = "*.ssd;*.dsd;*.img;*.adf;*.ads;*.adm;*.adl;*.sdd;*.ddd;*.fdi;*.imd;*.hfe"
                                "*.SSD;*.DSD;*.IMG;*.ADF;*.ADS;*.ADM;*.ADL;*.SDD;*.DDD;*.FDI;*.IMD;*.HFE";
 
@@ -1165,11 +1260,17 @@ void gui_allegro_event(ALLEGRO_EVENT *event)
         case IDM_FILE_PCMD:
             file_print_pipe(event);
             break;
+        case IDM_FILE_SERIAL:
+            serial_rec(event);
+            break;
         case IDM_FILE_M5000:
-            m5000_rec(event);
+            toggle_record(event, &music5000_rec);
             break;
         case IDM_FILE_PAULAREC:
-            paula_rec(event);
+            toggle_record(event, &paula_rec);
+            break;
+        case IDM_FILE_SOUNDREC:
+            toggle_record(event, &sound_rec);
             break;
         case IDM_FILE_EXIT:
             quitting = true;
@@ -1295,7 +1396,7 @@ void gui_allegro_event(ALLEGRO_EVENT *event)
             video_set_borders(vid_fullborders);
             break;
         case IDM_VIDEO_FULLSCR:
-            video_toggle_fullscreen();
+            toggle_fullscreen();
             break;
         case IDM_VIDEO_PAL:
             vid_pal = !vid_pal;
@@ -1319,7 +1420,10 @@ void gui_allegro_event(ALLEGRO_EVENT *event)
             sound_beebsid = !sound_beebsid;
             break;
         case IDM_SOUND_MUSIC5000:
-            sound_music5000 = !sound_music5000;
+            toggle_music5000();
+            break;
+        case IDM_SOUND_MFILT:
+            music5000_fno = radio_event_with_deselect(event, music5000_fno);
             break;
         case IDM_SOUND_PAULA:
             sound_paula = !sound_paula;
@@ -1394,6 +1498,9 @@ void gui_allegro_event(ALLEGRO_EVENT *event)
         case IDM_SPEED:
             main_setspeed(radio_event_simple(event, emuspeed));
             break;
+        case IDM_AUTOSKIP:
+            autoskip = !autoskip;
+            break;
         case IDM_DEBUGGER:
             debug_toggle_core();
             break;
@@ -1416,13 +1523,34 @@ void gui_allegro_event(ALLEGRO_EVENT *event)
         case IDM_KEY_PAD:
             keypad = !keypad;
             break;
+        case IDM_JIM_SIZE:
+            mem_jim_setsize(radio_event_simple(event, mem_jim_size));
+            break;
         case IDM_AUTO_PAUSE:
             autopause = !autopause;
             break;
         case IDM_MOUSE_AMX:
             mouse_amx = !mouse_amx;
             break;
+        case IDM_TRIACK_SEGA_ADAPTER:
+            tricky_sega_adapter = !tricky_sega_adapter;
+            remap_joystick(0);
+            remap_joystick(1);
+            break;
+        case IDM_JOYSTICK:
+            change_joystick(0, radio_event_with_deselect(event, joystick_index[0]));
+            break;
+        case IDM_JOYSTICK2:
+            change_joystick(1, radio_event_with_deselect(event, joystick_index[1]));
+        case IDM_MOUSE_STICK:
+            mouse_stick = !mouse_stick;
+            break;
         case IDM_JOYMAP:
-            joystick_change_joymap(radio_event_simple(event, joymap_num));
+            joymap_index[0] = radio_event_simple(event, joymap_index[0]);
+            remap_joystick(0);
+        case IDM_JOYMAP2:
+            joymap_index[1] = radio_event_simple(event, joymap_index[1]);
+            remap_joystick(1);
+            break;
     }
 }

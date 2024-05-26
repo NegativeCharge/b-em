@@ -1,7 +1,7 @@
 ; vdfs.asm
 ;
 ; VDFS for B-Em
-; Copyright 2018 Steve Fosdick.
+; Copyright 2018-2023 Steve Fosdick.
 ;
 ; This module implements the ROM part of a Virtual Disk Filing
 ; System, one in which a part of filing system of the host is
@@ -37,6 +37,9 @@ fsno_adfs   =   &08                 ; ADFS filing system no.
 
 claim_adfs  =   &80
 claim_dfs   =   &40
+write_dates =   &10
+dfs_mode    =   &02
+vdfs_active =   &01
 
 ; The interface between this ROM and the vdfs.c module, four ports
 ; in the FRED 1Mhz bus area.
@@ -102,11 +105,11 @@ prtextws    =   &A8
             jmp     service
             equb    &82                 ; ROM type.
             equb    copyright-start
-.romversion equb    &06
+.romversion equb    &07
 .romtitle   equs    "B-Em VDFS", &00
             include "version.asm"
 .copyright  equb    &00
-            equs    "(C) 2018 Steve Fosdick, GPL3", &00
+            equs    "(C) 2018-2023 Steve Fosdick, GPL3", &00
             equd    0
 .banner     equs    "Virtual DFS", &00
 .msg_nclaim equs    "ADFS is not being claimed", &00
@@ -131,7 +134,7 @@ prtextws    =   &A8
             equw    fs_claim        ; say which filing systems claimed.
             equw    dir_cat         ; *CAT  via OSFSC
             equw    dir_ex          ; *EX   via OSFSC
-            equw    pr_all          ; *INFO via ISFSC
+            equw    dir_info        ; *INFO via OSFSC
             equw    cmd_dump        ; *DUMP
             equw    cmd_list        ; *LIST
             equw    cmd_print       ; *PRiNT
@@ -153,6 +156,12 @@ prtextws    =   &A8
             equw    close_all
             equw    cmd_build       ; *BUILD
             equw    cmd_append      ; *APPEND.
+            equw    opt1_print
+            equw    print_split
+            equw    mmb_din
+            equw    mmb_dop
+            equw    mmb_onboot
+            equw    mmb_dout
 .dispend
 
 ; Stubs to transfer control to the vdfs.c module.
@@ -195,8 +204,6 @@ prtextws    =   &A8
 
 .fsstart
 {
-            tya
-            pha
             lda     #&06            ; Inform current FS new FS taking over
             jsr     callfscv
             ldx     #&00
@@ -218,15 +225,14 @@ prtextws    =   &A8
             iny
             cpx     #&0e
             bne     vecloop
-            pla
-            pha
-            sta     port_fsid
+            lda     #vdfs_active    ; Make VDFS active.
+            ora     port_flags
+            sta     port_flags
             lda     #&8f
             ldx     #&0f
             jsr     OSBYTE          ; Notify that vectors have changed
-            pla
-            tay
             lda     #&00
+            ldy     port_fsid
             rts
 .callfscv   jmp     (&021E)
 .vectab     equw    file
@@ -262,7 +268,6 @@ prtextws    =   &A8
             jsr     prtitle         ; announce the filing system
             jsr     OSNEWL
             jsr     OSNEWL
-            ldy     #fsno_vdfs
             jsr     fsstart         ; same setup as for call &12.
             pla
             bne     noboot1         ; then maybe exec !BOOT.
@@ -445,7 +450,11 @@ prtextws    =   &A8
 .notdir     pr_attr &08, 'L'
             pr_attr &02, 'W'
             pr_attr &01, 'R'
-            rts
+            lda     #&01
+            bit     &010d
+            beq     notnlt
+            outcnt  'T'
+.notnlt     rts
 }
 
 .pr_others  outcnt  '/'
@@ -487,7 +496,6 @@ prtextws    =   &A8
             adc     #&06
 .ddig       jmp     OSWRCH
 
-
             macro   hexout addr
             lda     addr
             jsr     hexbyt
@@ -498,21 +506,38 @@ prtextws    =   &A8
             jsr     pr_others
             jsr     pr_pad
             twospc
-            hexout  &0111
-            hexout  &0110
-            hexout  &010f
-            hexout  &010e
+            ldx     #&0e
+            jsr     hexfour
             twospc
-            hexout  &0115
-            hexout  &0114
-            hexout  &0113
-            hexout  &0112
+            ldx     #&12
+            jsr     hexfour
             twospc
-            hexout  &0119
-            hexout  &0118
-            hexout  &0117
-            hexout  &0116
+            ldx     #&16
+            jsr     hexfour
+            twospc
+            hexout  &011a
+            outchr  '-'
+            ldx     &011b
+            lda     month1,x
+            jsr     OSWRCH
+            lda     month2,x
+            jsr     OSWRCH
+            lda     month3,x
+            jsr     OSWRCH
+            outchr  '-'
+            hexout  &011c
+            hexout  &011d
+            outspc
+            hexout  &011e
+            outchr  ':'
+            hexout  &011f
+            outchr  ':'
+            hexout  &0120
             jmp     OSNEWL
+
+.month1     equs    "JFMAMJJASOND"
+.month2     equs    "aeapauuuecoe"
+.month3     equs    "nbrrynlgptvc"
 
 .opt_tab    equb    msg_off-banner
             equb    msg_load-banner
@@ -572,25 +597,20 @@ prtextws    =   &A8
             bne     cat_liblp
 .nolib      jsr     OSNEWL
             jsr     OSNEWL
-            lda     #&20            ; DFS mode?
+            lda     #dfs_mode       ; DFS mode?
             bit     port_flags
+            beq     adfs_cat
             bne     dfs_cat
 
-            lda     #&0c            ; Fetch the first entry.
-            sta     port_cmd
-            bcs     cat_done
-.cat_loop   ldx     #&00
+.cat_loop   ldx     #&00            ; print the entry.
             jsr     pr_basic
             jsr     pr_others
             jsr     pr_pad
-.adfs_cat   lda     #&0c            ; Fetch the next entry.
+.adfs_cat   lda     #&0c            ; fetch an entry.
             sta     port_cmd
             bcc     cat_loop
             jmp     OSNEWL
 
-            lda     #&0d            ; fetch one directory entry.
-            sta     port_cmd
-            bcs     dfs_none1
 .dfs_lp1    jsr     pr_dfs
             jsr     pr_pad
 .dfs_cat    lda     #&0d            ; fetch one directory entry.
@@ -609,7 +629,7 @@ prtextws    =   &A8
             jmp     OSNEWL
 .cat_done   rts
 
-.dir_ex     lda     #&20            ; DFS mode?
+.dir_ex     lda     #dfs_mode       ; DFS mode?
             bit     port_flags
             bne     ex_dfs
             beq     ex_adfs
@@ -626,6 +646,69 @@ prtextws    =   &A8
             bcc     ex_dfs_lp
             rts
 
+.dir_info   jsr     pr_all
+            lda     #&14
+            sta     port_cmd
+            bcc     dir_info
+            rts
+
+.mmb_din    lda     #&16
+            bne     mmb_common
+.mmb_dop    lda     #&18
+            bne     mmb_common
+.mmb_onboot lda     #&19
+            bne     mmb_common
+.mmb_dout   lda     #&1a
+.mmb_common pha
+            lda     #&00
+            tay
+            jsr     OSARGS
+            cmp     #&04
+            beq     mmb_dfs
+.mmb_baddrv ldx     #&00
+            beq     mmb_tail
+.mmb_dfs    lda     #&0d
+            sta     &0101
+            sta     &0105
+            ldy     #&01
+            sty     &0102
+            lda     #&ff
+            sta     &0103
+            sta     &0104
+            lda     #&00
+            ldx     #&08
+.mmb_clear  sta     &0107,X
+            dex
+            bne     mmb_clear
+            lda     #&06
+            jsr     OSGBPB
+            lda     &010d
+            cmp     #&01
+            bne     mmb_baddrv
+            lda     &010e
+            and     #&03
+            tax
+.mmb_tail   pla
+            sta     port_cmd
+            lda     #&00
+            rts
+
+.print_split
+{
+            ldy     #0
+.loop       lda     (&a8),y
+            beq     done
+            jsr     OSWRCH
+            iny
+            bne     loop
+            inc     &a9
+            bne     loop
+.done       txa
+            bne     more
+            rts
+.more       sta     port_cmd
+}
+
 .not_found
 {
             ldx     #end-msg
@@ -640,6 +723,10 @@ prtextws    =   &A8
             equb    &00
 .end
 }
+
+.opt1_print jsr     pr_all
+            lda     #&01
+            rts
 
 ; The *DUMP command.
 
@@ -893,8 +980,6 @@ prtextws    =   &A8
             lda     #&02            ; Read file length.
             ldx     #argsblk
             jsr     OSARGS
-            lda     #&12            ; Temporarily set our own ROM bank as RAM.
-            sta     port_cmd
             lda     argsblk         ; Set the length in the parameter
             sta     gbpbpb+&09      ; block for OSGBPB.
             lda     argsblk+1
@@ -920,8 +1005,6 @@ prtextws    =   &A8
 .found      sty     filechan
             lda     #&02            ; First GBPB to use current pointer.
             sta     gbpbcmd
-            lda     #&12            ; Temporarily set our own ROM bank as RAM.
-            sta     port_cmd
 }
 
 ; Common code for *APPEND/*BUILD using OSGBPB.
@@ -960,9 +1043,7 @@ prtextws    =   &A8
             sta     gbpbcmd
             jmp     line_lp
 
-.escape     lda     #&13            ; Restore our RAM bank status.
-            sta     port_cmd
-            lda     #&7c            ; Clear Escape without flushing anything.
+.escape     lda     #&7c            ; Clear Escape without flushing anything.
             jsr     OSBYTE
             lda     #&00            ; Close the file.
             ldy     filechan
@@ -1060,21 +1141,7 @@ prtextws    =   &A8
             outchr  'm'
             outspc
             lda     romid
-            cmp     #&0A
-            bcs     geten
-            outchr  '0'
-            lda     romid
-            jmp     both
-.geten      outchr  '1'
-            lda     romid
-            sec
-            sbc     #&0a
-.both       and     #&0f
-            clc
-            adc     #'0'
-            jsr     OSWRCH
-            outspc
-            outchr  ':'
+            jsr     hexnyb
             outspc
             outchr  '('
             txa
@@ -1418,19 +1485,120 @@ prtextws    =   &A8
 
 .tube_explode
 {
-            cpy     #&00
-            beq     notube          ; if no tube.
+            tya
+            pha
+            bne     istube
+            cpx     #&05            ; X is set to boot logo number by VDFS C code.
+            bcs     done            ; skip if out of range.
+            txa
+            pha
+            lda     #&87            ; get the current screen mode.
+            jsr     OSBYTE
+            pla
+            tax
+            tya
+            and     #&07            ; in case of shadow modes.
+            cmp     #&07
+            bne     done            ; logos only in mode 7.
+            lda     &a8
+            pha
+            lda     &a9
+            pha
+            lda     logolo,x        ; set address of relevant logo.
+            sta     &a8
+            lda     logohi,x
+            sta     &a9
+            lda     #&86            ; get current cursor position.
+            jsr     OSBYTE
+            tya                     ; save cursor position on stack.
+            pha
+            txa
+            pha
+            ldy     #&00            ; print the characters of the logo.
+            lda     (&a8),y
+.logolp     jsr     OSWRCH
+            iny
+            lda     (&a8),y
+            bne     logolp
+            pla                     ; restore the character position.
+            jsr     OSWRCH
+            pla
+            jsr     OSWRCH
+            pla
+            sta     &a9
+            pla
+            sta     &a8
+.done       pla
+            tay
+            lda     #&fe            ; don't claim the call.
+            rts
+.imsglp     jsr     OSWRCH
+.istube     bit     &FEE0           ; wait for character to be send from tube
+            bpl     istube
+            lda     &FEE1           ; fetch the character.
+            bne     imsglp          ; loop until end of message.
             lda     #&14            ; explode character set.
             ldx     #&06
             jsr     OSBYTE
-.imsglp     bit     &FEE0           ; wait for character to be send from tube
-            bpl     imsglp
-            lda     &FEE1           ; fetch the character.
-            beq     done            ; end of message?
-            jsr     OSWRCH
-            jmp     imsglp
-.notube     lda     #&fe
-.done       rts
+            lda     #&d7            ; suppress OS start-up message.
+            ldx     #&00
+            ldy     #&7f
+            jsr     OSBYTE
+            pla
+            tay
+            lda     #&00
+            rts
+
+.owl_dv8    equb    &1f,&1e,&01,&91,&e2,&a6,&e2,&a2,&e6,&a6,&e2,&a2,&e6
+            equb    &1f,&1e,&02,&91,&a8,&b0,&a9,&a1,&b0,&b0,&a9,&a1,&b8
+            equb    &1f,&1e,&03,&93,&e2,&e6,&e4,&e0,&e2,&e0,&e0,&a6,&e2
+            equb    &1f,&1e,&04,&92,&a8,&b9,&b9,&b9,&b9,&20,&20,&20,&a8
+            equb    &1f,&1e,&05,&96,&20,&a2,&e6,&e6,&e6,&e4,&20,&20,&e2
+            equb    &1f,&1e,&06,&94,&20,&20,&20,&a9,&b9,&a9,&b9,&b0,&a8
+            equb    &1f,&1e,&07,&95,&20,&a4,&a4,&a6,&a4,&a6,&a4,&a2,&e6
+            equb    &1f,&00
+.owl_ash    equb    &1f,&1e,&01,&91,&e2,&a6,&e2,&a2,&f6,&a6,&e2,&a2,&e6
+            equb    &1f,&1e,&02,&91,&a8,&b0,&a9,&a1,&b0,&b0,&a9,&a1,&b8
+            equb    &1f,&1e,&03,&91,&e2,&f6,&e4,&e0,&e2,&e0,&e0,&a6,&e2
+            equb    &1f,&1e,&04,&93,&a8,&b9,&b9,&b9,&b9,&20,&20,&20,&a8
+            equb    &1f,&1e,&05,&93,&20,&a2,&f6,&f6,&f6,&e4,&20,&20,&e2
+            equb    &1f,&1e,&06,&92,&20,&20,&20,&a9,&b9,&a9,&b9,&b0,&a8
+            equb    &1f,&1e,&07,&92,&20,&a4,&a4,&a6,&a4,&a6,&a4,&a2,&e6
+            equb    &1f,&00
+.owl_mono   equb    &1f,&1e,&01,&97,&e2,&a6,&e2,&a2,&f6,&a6,&e2,&a2,&e6
+            equb    &1f,&1e,&02,&97,&a8,&b0,&a9,&a1,&b0,&b0,&a9,&a1,&b8
+            equb    &1f,&1e,&03,&97,&e2,&f6,&e4,&e0,&e2,&e0,&e0,&a6,&a2
+            equb    &1f,&1e,&04,&97,&a8,&b9,&b9,&b9,&b9,&20,&20,&20,&a8
+            equb    &1f,&1e,&05,&97,&20,&a2,&f6,&f6,&f6,&e4,&20,&20,&e2
+            equb    &1f,&1e,&06,&97,&20,&20,&20,&a9,&b9,&a9,&b9,&b0,&a8
+            equb    &1f,&1e,&07,&97,&20,&a4,&a4,&a6,&a4,&a6,&a4,&a2,&e6
+            equb    &1f,&00
+.acorn      equb    &1f,&1e,&01,&92,&9a,&a0,&a0,&f8,&ff,&ff,&f4,&a0,&a0
+            equb    &1f,&1e,&02,&92,&9a,&a0,&e8,&ff,&ff,&ff,&ff,&b4,&a0
+            equb    &1f,&1e,&03,&92,&9a,&a0,&fe,&ff,&ff,&ff,&ff,&fd,&a0
+            equb    &1f,&1e,&04,&92,&9a,&e8,&ff,&ff,&ff,&ff,&ff,&ff,&b4
+            equb    &1f,&1e,&05,&92,&9a,&e2,&f3,&f3,&f3,&f3,&f3,&f3,&b1
+            equb    &1f,&1e,&06,&92,&9a,&a2,&ff,&ff,&ff,&ff,&ff,&ff,&a1
+            equb    &1f,&1e,&07,&92,&9a,&a0,&a2,&ab,&af,&bf,&a7,&a1,&a0
+            equb    &1f,&1e,&08,&92,&9a,&a0,&a3,&a3,&ac,&ad,&e4,&f0,&a0
+            equb    &1f,&00
+.master     equb    &1f,&20,&01,&97,&6a,&64,&20,&20,&20,&5f,&6e
+            equb    &1f,&20,&02,&97,&6a,&20,&29,&30,&38,&21,&6a
+            equb    &1f,&20,&03,&97,&6A,&20,&30,&6a,&20,&30,&6a
+            equb    &1f,&20,&04,&97,&6a,&20,&35,&6a,&20,&35,&6a
+            equb    &1f,&20,&05,&97,&6a,&20,&35,&6a,&20,&35,&6a
+            equb    &1f,&20,&06,&97,&6a,&20,&35,&6a,&20,&35,&6a
+            equb    &1f,&00
+.logolo     equb    <owl_dv8
+            equb    <owl_ash
+            equb    <owl_mono
+            equb    <acorn
+            equb    <master
+.logohi     equb    >owl_dv8
+            equb    >owl_ash
+            equb    >owl_mono
+            equb    >acorn
+            equb    >master
 }
 
 .break_type
@@ -1441,6 +1609,8 @@ prtextws    =   &A8
             jsr     OSBYTE
             stx     port_a
             lda     #&09
+            ldx     &f4             ; get our own ROM number.
+            ldy     #>gbpbpb        ; get page number of ROM/RAM split.            
             sta     port_cmd
             rts
 }
@@ -1534,10 +1704,11 @@ prtextws    =   &A8
             sta     port_cmd
             rts
 .end
+            align   &100
 .gbpbpb     equb    &00
             equd    &00000000
             equd    &00000000
             equd    &00000000
 .buffer     equb    &00
 
-            save    "vdfs6", start, end
+            save    "vdfs7", start, end

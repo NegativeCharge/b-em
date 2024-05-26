@@ -1,6 +1,6 @@
 # Makefile.am for B-em
 
-bin_PROGRAMS = b-em m7makechars hdfmt jstest gtest sdf2imd
+bin_PROGRAMS = b-em m7makechars hdfmt jstest gtest sdf2imd bsnapdump
 noinst_SCRIPTS = ../b-em$(EXEEXT)
 CLEANFILES = $(noinst_SCRIPTS)
 
@@ -14,7 +14,7 @@ amrefresh:
 #   INCLUDE_DEBUGGER - include the cpu_debug implementation
 # USE_MEMORY_POINTER - do not assume Co Pro memory starts at address 0
 
-b_em_CFLAGS = $(allegro_CFLAGS) -DBEM -DINCLUDE_DEBUGGER -DUSE_MEMORY_POINTER
+b_em_CFLAGS = $(allegro_CFLAGS) -DBEM -DINCLUDE_DEBUGGER -DUSE_MEMORY_POINTER -DMODET -DMODE32 -DBEEBEM -DM68K
 
 # workaround for Win32 Allegro, which has `allegro-config' missing
 if OS_WIN
@@ -62,6 +62,7 @@ b_em_SOURCES = \
 	debugger_symbols.cpp \
 	disc.c fdi.c \
 	fdi2raw.c \
+	fullscreen.c \
 	gui-allegro.c\
 	hfe.c \
 	i8271.c \
@@ -82,6 +83,7 @@ b_em_SOURCES = \
     mc6809nc/mc6809_dis.c \
 	main.c \
 	mem.c \
+	mmb.c \
 	model.c \
 	mouse.c \
     mmccard.c \
@@ -133,7 +135,16 @@ b_em_SOURCES = \
 	resid-fp/wave8580_PST.cc \
 	resid-fp/wave8580_PS_.cc \
 	resid-fp/wave8580_P_T.cc \
-	resid-fp/wave8580__ST.cc
+	resid-fp/wave8580__ST.cc \
+	ARMulator/armemu.c \
+	ARMulator/arminit.c \
+	ARMulator/armmem.c \
+	ARMulator/armsupp.c \
+	ARMulator/bag.c \
+	ARMulator/thumbemu.c \
+	ARMulator/armdis.cpp \
+	map.c \
+	sprow.c
 
 if NO_TSEARCH
 b_em_SOURCES += tsearch.c
@@ -152,3 +163,7 @@ gtest_LDADD = -lallegro_main
 sdf2imd_SOURCES = sdf2imd.c sdf-geo.c
 
 sdf2imd_LDADD = -lallegro_main
+
+bsnapdump_SOURCES = bsnapdump.c
+
+bsnapdump_LDADD = -lz

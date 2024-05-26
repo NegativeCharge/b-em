@@ -9,8 +9,10 @@ typedef enum {
     IDM_FILE_SCREEN_SHOT,
     IDM_FILE_PRINT,
     IDM_FILE_PCMD,
+    IDM_FILE_SERIAL,
     IDM_FILE_M5000,
     IDM_FILE_PAULAREC,
+    IDM_FILE_SOUNDREC,
     IDM_FILE_EXIT,
     IDM_EDIT_PASTE,
     IDM_EDIT_COPY,
@@ -65,6 +67,7 @@ typedef enum {
     IDM_SOUND_INTERNAL,
     IDM_SOUND_BEEBSID,
     IDM_SOUND_MUSIC5000,
+    IDM_SOUND_MFILT,
     IDM_SOUND_PAULA,
     IDM_SOUND_DAC,
     IDM_SOUND_DDNOISE,
@@ -95,16 +98,24 @@ typedef enum {
     IDM_KEY_AS,
     IDM_KEY_LOGICAL,
     IDM_KEY_PAD,
+    IDM_JIM_SIZE,
     IDM_AUTO_PAUSE,
     IDM_MOUSE_AMX,
+    IDM_TRIACK_SEGA_ADAPTER,
+    IDM_MOUSE_STICK,
     IDM_JOYMAP,
+    IDM_JOYMAP2,
+    IDM_JOYSTICK,
+    IDM_JOYSTICK2,
     IDM_SPEED,
+    IDM_AUTOSKIP,
     IDM_DEBUGGER,
     IDM_DEBUG_TUBE,
     IDM_DEBUG_BREAK
 } menu_id_t;
 
 extern void gui_allegro_init(ALLEGRO_EVENT_QUEUE *queue, ALLEGRO_DISPLAY *display);
+extern void gui_allegro_destroy(ALLEGRO_EVENT_QUEUE *queue, ALLEGRO_DISPLAY *display);
 extern void gui_allegro_event(ALLEGRO_EVENT *event);
 extern void gui_allegro_set_eject_text(int drive, ALLEGRO_PATH *path);
 extern void gui_set_disc_wprot(int drive, bool enabled);

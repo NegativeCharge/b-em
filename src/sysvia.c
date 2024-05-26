@@ -84,7 +84,7 @@ static void sysvia_update_sdb()
 
 static void sysvia_write_IC32(uint8_t val)
 {
-        uint8_t oldIC32 = IC32;
+    uint8_t oldIC32 = IC32;
 
         if (val & 8)
            IC32 |=  (1 << (val & 7));
@@ -94,7 +94,7 @@ static void sysvia_write_IC32(uint8_t val)
         sysvia_update_sdb();
 
         if (!(IC32 & 1) && (oldIC32 & 1))
-           sn_write(sdbval);
+            sn_write(sdbval);
 
         scrsize = ((IC32 & 0x10) ? 2 : 0) | ((IC32 & 0x20) ? 1 : 0);
 
@@ -140,6 +140,20 @@ uint8_t sysvia_read_portB()
                 temp &= ~0x30;
                 if (i2c_clock) temp |= 0x20;
                 if (i2c_data)  temp |= 0x10;
+        }
+        else if (tricky_sega_adapter)
+        {
+                temp |= 0xF0;
+                if ((sysvia.pcr & 0xE0) == 0xC0) // CB2 Low Output
+                {
+                    if (joybutton[2]) temp &= ~0x10;
+                    if (joybutton[3]) temp &= ~0x20;
+                }
+                else // assuming high, could do a better job!
+                {
+                    if (joybutton[0]) temp &= ~0x10;
+                    if (joybutton[1]) temp &= ~0x20;
+                }
         }
         else
         {
@@ -193,4 +207,11 @@ void sysvia_loadstate(FILE *f)
 
         IC32=getc(f);
         scrsize=((IC32&16)?2:0)|((IC32&32)?1:0);
+}
+
+int sysvia_get_sn_data(uint8_t *data)
+{
+        *data = sdbval;
+
+        return !(IC32 & 1);
 }

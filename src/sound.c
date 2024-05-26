@@ -1,3 +1,4 @@
+#define _DEBUG
 /*B-em v2.2 by Tom Walker
   Internal SN sound chip emulation*/
 
@@ -21,24 +22,24 @@ static ALLEGRO_MIXER *mixer;
 static ALLEGRO_AUDIO_STREAM *stream;
 
 static int sound_pos = 0;
+static int sound_sn_pos = 0;
+
 static short sound_buffer[BUFLEN_SO];
 
-#define NCoef 4
+static int sound_sn76489_cycles = 0, sound_poll_cycles = 0;
+
+#define NCoef 2
 static float iir(float NewSample) {
     static const float ACoef[NCoef+1] = {
-        0.30631912757971225000,
-        0.00000000000000000000,
-        -0.61263825515942449000,
-        0.00000000000000000000,
-        0.30631912757971225000
+        0.9844825527642453,
+        -1.9689651055284907,
+        0.9844825527642453
     };
 
     static const float BCoef[NCoef+1] = {
-        1.00000000000000000000,
-        -1.86772356053227330000,
-        1.08459167506874430000,
-        -0.37711292573951394000,
-        0.17253125052500490000
+        1,
+        -1.9687243044104659,
+        0.9692059066465155
     };
 
     static float y[NCoef+1]; //output samples
@@ -60,40 +61,116 @@ static float iir(float NewSample) {
     return y[0];
 }
 
-void sound_poll(void)
+static void sound_rec_float(float *buf)
+{
+    if (sound_rec.fp) {
+        if (!sound_rec.rec_started) {
+            for (int c = 0; c < BUFLEN_SO; ++c) {
+                if (buf[c]) {
+                    sound_rec.rec_started = true;
+                    break;
+                }
+            }
+        }
+        if (sound_rec.rec_started) {
+            unsigned char tmp[BUFLEN_SO * 2];
+            unsigned char *ptr = tmp;
+            for (int c = 0; c < BUFLEN_SO; ++c) {
+                int value = 32767 * buf[c];
+                *ptr++ = value;
+                *ptr++ = value >> 8;
+            }
+            fwrite(tmp, sizeof(tmp), 1, sound_rec.fp);
+        }
+    }
+}
+
+static void sound_rec_int(short *buf)
+{
+    if (sound_rec.fp) {
+        if (!sound_rec.rec_started) {
+            for (int c = 0; c < BUFLEN_SO; ++c) {
+                if (buf[c]) {
+                    sound_rec.rec_started = true;
+                    break;
+                }
+            }
+        }
+        if (sound_rec.rec_started) {
+            unsigned char tmp[BUFLEN_SO * 2];
+            unsigned char *ptr = tmp;
+            for (int c = 0; c < BUFLEN_SO; ++c) {
+                int value = buf[c];
+                *ptr++ = value;
+                *ptr++ = value >> 8;
+            }
+            fwrite(tmp, sizeof(tmp), 1, sound_rec.fp);
+        }
+    }
+}
+
+static void sound_poll_all(void)
 {
     float *buf;
     int c;
 
     if ((sound_internal || sound_beebsid) && stream) {
+        int16_t temp_buffer[2] = {0};
+
         if (sound_beebsid)
-            sid_fillbuf(sound_buffer + sound_pos, 2);
-        if (sound_internal)
-            sn_fillbuf(sound_buffer + sound_pos, 2);
+            sid_fillbuf(temp_buffer, 2);
         if (sound_paula)
-            paula_fillbuf(sound_buffer + sound_pos, 2);
+            paula_fillbuf(temp_buffer, 2);
         if (sound_dac) {
-            sound_buffer[sound_pos]     += (((int)lpt_dac - 0x80) * 32);
-            sound_buffer[sound_pos + 1] += (((int)lpt_dac - 0x80) * 32);
+            temp_buffer[0] += (((int)lpt_dac - 0x80) * 32);
+            temp_buffer[1] += (((int)lpt_dac - 0x80) * 32);
         }
 
-        // skip forward 2 mono samples
-        sound_pos += 2;
+        for (c = 0; c < 8/2; c++) {
+            sound_buffer[sound_pos + c] += temp_buffer[0];
+            sound_buffer[sound_pos + c + 4] += temp_buffer[1];
+        }
+        // skip forward 8 mono samples
+        sound_pos += 8;
         if (sound_pos == BUFLEN_SO) {
             if ((buf = al_get_audio_stream_fragment(stream))) {
                 if (sound_filter) {
                     for (c = 0; c < BUFLEN_SO; c++)
                         buf[c] = iir((float)sound_buffer[c] / 32767.0);
+                    sound_rec_float(buf);
                 } else {
                     for (c = 0; c < BUFLEN_SO; c++)
                         buf[c] = (float)sound_buffer[c] / 32767.0;
+                    sound_rec_int(sound_buffer);
                 }
                 al_set_audio_stream_fragment(stream, buf);
                 al_set_audio_stream_playing(stream, true);
             } else
                 log_debug("sound: overrun");
             sound_pos = 0;
+            sound_sn_pos = 0;
             memset(sound_buffer, 0, sizeof(sound_buffer));
+        }
+    }
+}
+
+void sound_poll(int cycles)
+{
+    sound_sn76489_cycles -= cycles;
+    if (sound_sn76489_cycles < 0)
+    {
+        sound_sn76489_cycles += 16;
+
+        if (sound_internal)
+            sn_fillbuf(&sound_buffer[sound_sn_pos], 1);
+
+        sound_sn_pos++;
+
+        sound_poll_cycles -= 16;
+        if (sound_poll_cycles < 0)
+        {
+            sound_poll_cycles += 128;
+            sound_poll_all();
         }
     }
 }
@@ -156,3 +233,89 @@ void sound_close(void)
     if (voice)
         al_destroy_voice(voice);
 }
+
+bool sound_start_rec(sound_rec_t *rec, const char *filename)
+{
+    static const char zeros[] = { 0, 0, 0, 0, 0, 0 };
+
+    FILE *fp = fopen(filename, "wb");
+    if (fp) {
+        unsigned bytes_samp = (rec->bits_samp + 7) / 8;
+        unsigned block_align = bytes_samp * rec->channels;
+        /* skip past the WAVE header. */
+        fseek(fp, 44, SEEK_SET);
+        /* Write an initial sample of zero */
+        fwrite_unlocked(zeros, block_align, 1, fp);
+        rec->fp = fp;
+        rec->rec_started = false;
+        return true;
+    }
+    else {
+        log_error("unable to open %s for writing: %s", filename, strerror(errno));
+        return false;
+    }
+}
+
+static const unsigned char hdr_tmpl[] = {
+    0x52, 0x49, 0x46, 0x46, // RIFF
+    0x00, 0x00, 0x00, 0x00, // file size.
+    0x57, 0x41, 0x56, 0x45, // "WAVE"
+    0x66, 0x6D, 0x74, 0x20, // "fmt "
+    0x10, 0x00, 0x00, 0x00  // format chunk size
+};
+
+static void put16le(unsigned value, unsigned char *addr)
+{
+    addr[0] = value;
+    addr[1] = value >> 8;
+}
+
+static void put32le(unsigned value, unsigned char *addr)
+{
+    addr[0] = value;
+    addr[1] = value >> 8;
+    addr[2] = value >> 16;
+    addr[3] = value >> 24;
+}
+
+void sound_stop_rec(sound_rec_t *rec)
+{
+    FILE *fp = rec->fp;
+    long size = ftell(fp) - 8;
+    unsigned samp_rate = rec->samp_rate;
+    unsigned bits_samp = rec->bits_samp;
+    unsigned bytes_samp = (bits_samp + 7) / 8;
+    unsigned channels = rec->channels;
+    unsigned byte_rate = samp_rate * bytes_samp;
+    unsigned block_align = bytes_samp * channels;
+    unsigned char hdr[44];
+    memcpy(hdr, hdr_tmpl, sizeof(hdr_tmpl));
+    put32le(size, hdr+4);
+    put16le(rec->wav_type, hdr+20);
+    put16le(channels, hdr+22);
+    put32le(samp_rate, hdr+24);
+    put32le(byte_rate, hdr+28);
+    put16le(block_align, hdr+32);
+    put16le(bits_samp, hdr+34);
+    hdr[36] = 0x64; // data
+    hdr[37] = 0x61;
+    hdr[38] = 0x74;
+    hdr[39] = 0x61;
+    size -= 36;
+    put32le(size, hdr+40);
+    fseek(fp, 0, SEEK_SET);
+    fwrite_unlocked(hdr, sizeof(hdr), 1, fp);
+    fclose(fp);
+    rec->fp = NULL;
+    rec->rec_started = false;
+}
+
+sound_rec_t sound_rec = {
+    NULL,    // fp
+    false,   // rec_started
+    "Record SN76489 to file",
+    1,       // WAVE type
+    1,       // channels
+    FREQ_SO, // sample rate
+    16       // bits/sample
+};

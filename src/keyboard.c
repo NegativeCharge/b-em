@@ -5,7 +5,7 @@
 #include "keyboard.h"
 #include "model.h"
 #include "6502.h"
-#include "video_render.h"
+#include "fullscreen.h"
 #include <ctype.h>
 #include <allegro5/keyboard.h>
 
@@ -344,7 +344,7 @@ static const uint8_t allegro2bbclogical[ALLEGRO_KEY_MAX] =
     0xbb,   // 57   ALLEGRO_KEY_F11
     0xaa,   // 58   ALLEGRO_KEY_F12
     0x70,   // 59   ALLEGRO_KEY_ESCAPE
-    0xbb,   // 60   ALLEGRO_KEY_TILDE
+    0xaa,   // 60   ALLEGRO_KEY_TILDE
     0xaa,   // 61   ALLEGRO_KEY_MINUS
     0xaa,   // 62   ALLEGRO_KEY_EQUALS
     0x59,   // 63   ALLEGRO_KEY_BACKSPACE
@@ -674,9 +674,9 @@ const struct key_act_const keyact_const[KEY_ACTION_MAX] = {
     { "break",        ALLEGRO_KEY_F12,   false, main_key_break,          do_nothing      },
     { "full-Speed",   ALLEGRO_KEY_PGUP,  false, main_start_fullspeed,    stop_full_speed },
     { "pause",        ALLEGRO_KEY_PGDN,  false, main_key_pause,          do_nothing      },
-    { "full-screen1", ALLEGRO_KEY_F11,   false, video_toggle_fullscreen, do_nothing      },
+    { "full-screen1", ALLEGRO_KEY_F11,   false, toggle_fullscreen_menu, do_nothing      },
     { "debug-break",  ALLEGRO_KEY_F10,   false, debug_break,             do_nothing      },
-    { "full-screen2", ALLEGRO_KEY_ENTER, true,  video_toggle_fullscreen, do_nothing      }
+    { "full-screen2", ALLEGRO_KEY_ENTER, true,  toggle_fullscreen_menu, do_nothing      }
 };
 
 uint8_t keylookup[ALLEGRO_KEY_MAX];
@@ -1045,6 +1045,8 @@ void key_char_event(const ALLEGRO_EVENT *event)
         keycode = map_keypad_intern(keycode, unichar);
         if (keycode == ALLEGRO_KEY_A && keyas && !keylogical)
             keycode = ALLEGRO_KEY_CAPSLOCK;
+        else if (keycode == ALLEGRO_KEY_S && keyas && !keylogical)
+            keycode = ALLEGRO_KEY_LCTRL;
         for (int act = 0; act < KEY_ACTION_MAX; act++) {
             log_debug("keyboard: checking key action %d:%s codes %d<>%d, alt %d<>%d", act, keyact_const[act].name, keycode, keyactions[act].keycode, hostalt, keyactions[act].altstate);
             if (keycode == keyactions[act].keycode && keyactions[act].altstate == hostalt) {
@@ -1088,6 +1090,10 @@ void key_up_event(const ALLEGRO_EVENT *event)
                 hostctrl = false;
                 shiftctrl = true;
             }
+            else if (keycode == ALLEGRO_KEY_A && keyas && !keylogical)
+                keycode = ALLEGRO_KEY_CAPSLOCK;
+            else if (keycode == ALLEGRO_KEY_S && keyas && !keylogical)
+                keycode = ALLEGRO_KEY_LCTRL;
             if (shiftctrl && keylogical)
                 set_logical_shift_ctrl_if_idle();
             keycode = map_keypad_intern(keycode, unichar);
@@ -1181,13 +1187,15 @@ void key_scan(int row, int col) {
 }
 
 bool key_is_down(void) {
-    if (keyrow == 0 && keycol >= 2 && keycol <= 9) {
-        if (keycol == 6 && autoboot > 0)
+    if (keyrow == 0) {
+        if (keycol == 0 && autoboot > 0) {
+            log_debug("keyboard: return shift is down (autoboot=%d), pc=%04X", autoboot, pc);
             return true;
-        return kbdips & (1 << (9 - keycol));
+        }
+        else if (keycol >= 2 && keycol <= 9)
+            return kbdips & (1 << (9 - keycol));
     }
-    else
-        return bbcmatrix[keycol][keyrow];
+    return bbcmatrix[keycol][keyrow];
 }
 
 bool key_any_down(void)

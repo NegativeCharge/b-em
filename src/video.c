@@ -6,6 +6,8 @@
 #include <allegro5/allegro_primitives.h>
 #include "b-em.h"
 
+#include "config.h"
+#include "6502.h"
 #include "mem.h"
 #include "model.h"
 #include "serial.h"
@@ -34,17 +36,24 @@ static int vadj;
 uint16_t ma, ttxbank;
 static uint16_t maback;
 static int vdispen, dispen;
-static int crtc_mode;
+static enum {
+    CRTC_TELETEXT,
+    CRTC_HIFREQ,
+    CRTC_LOFREQ
+} crtc_mode;
+
+uint64_t stopwatch_vblank;
 
 void crtc_reset()
 {
     hc = vc = sc = vadj = 0;
     crtc[9] = 10;
+    stopwatch_vblank = 0;
 }
 
 static void set_intern_dtype(enum vid_disptype dtype)
 {
-    if (crtc_mode == 0 && (crtc[8] & 1))
+    if (crtc_mode == CRTC_TELETEXT && (crtc[8] & 1))
         dtype = VDT_INTERLACE;
     else if (dtype == VDT_INTERLACE && !(crtc[8] & 1))
         dtype = VDT_SCALE;
@@ -55,7 +64,7 @@ static void crtc_setreg(int reg, uint8_t val)
 {
     val &= crtc_mask[reg];
     crtc[reg] = val;
-    if (crtc_i == 6 && vc == val)
+    if (reg == 6 && vc == val)
         vdispen = 0;
     else if (reg == 8)
         set_intern_dtype(vid_dtype_user);
@@ -65,7 +74,6 @@ static void crtc_setreg(int reg, uint8_t val)
 
 void crtc_write(uint16_t addr, uint8_t val)
 {
-//        log_debug("Write CRTC %04X %02X %04X\n",addr,val,pc);
     if (!(addr & 1))
         crtc_i = val & 31;
     else
@@ -137,6 +145,22 @@ uint8_t nula_attribute_text;
 static int nula_left_cut;
 static int nula_left_edge;
 static int mode7_need_new_lookup;
+
+static int nula_spect_toggle = 0;
+static int nula_spect_paper = 0;
+static int nula_spect_ink = 0;
+
+static const uint8_t nula_spect_colours[] =
+{
+    8, // 000 Black.
+    4, // 001 Blue.
+    1, // 010 Red.
+    5, // 011 Magenta
+    2, // 100 Green.
+    6, // 101 Cyan.
+    3, // 110 Yellow
+    7  // 111 White.
+};
 
 static inline uint32_t makecol(int red, int green, int blue)
 {
@@ -278,11 +302,11 @@ void videoula_write(uint16_t addr, uint8_t val)
             ula_ctrl = val;
             ula_mode = (ula_ctrl >> 2) & 3;
             if (val & 2)
-                crtc_mode = 0;  // Teletext
+                crtc_mode = CRTC_TELETEXT;  // Teletext
             else if (val & 0x10)
-                crtc_mode = 1;  // High frequency
+                crtc_mode = CRTC_HIFREQ;    // High frequency
             else
-                crtc_mode = 2;  // Low frequency
+                crtc_mode = CRTC_LOFREQ;    // Low frequency
             set_intern_dtype(vid_dtype_user);
         }
         break;
@@ -326,7 +350,7 @@ void videoula_write(uint16_t addr, uint8_t val)
                 break;
 
             case 6:
-                nula_attribute_mode = param & 1;
+                nula_attribute_mode = param & 3;
                 break;
 
             case 7:
@@ -564,7 +588,7 @@ static void mode7_gen_nula_lookup(void)
     mode7_need_new_lookup = 0;
 }
 
-static inline void mode7_render(ALLEGRO_LOCKED_REGION *region, uint8_t dat)
+static void mode7_render(ALLEGRO_LOCKED_REGION *region, uint8_t dat)
 {
     if (scrx < (1280-32)) {
         int mcolx = mode7_col;
@@ -747,20 +771,19 @@ ALLEGRO_COLOR border_col;
 
 ALLEGRO_DISPLAY *video_init(void)
 {
-    int c;
-    int temp, temp2, left;
-
 #ifdef ALLEGRO_GTK_TOPLEVEL
     al_set_new_display_flags(ALLEGRO_WINDOWED | ALLEGRO_GTK_TOPLEVEL | ALLEGRO_RESIZABLE);
 #else
     al_set_new_display_flags(ALLEGRO_WINDOWED | ALLEGRO_RESIZABLE);
 #endif
-    al_set_new_display_option(ALLEGRO_VSYNC, 2, ALLEGRO_REQUIRE);
-    log_debug("video: vsync=%d", al_get_new_display_option(ALLEGRO_VSYNC, &temp));
-
+    int vsync = get_config_int("video", "allegro_vsync", -1);
+    if (vsync >= 0) {
+        int temp;
+        al_set_new_display_option(ALLEGRO_VSYNC, 2, ALLEGRO_SUGGEST);
+        log_debug("video: config vsync=%d, actual=%d", vsync, al_get_new_display_option(ALLEGRO_VSYNC, &temp));
+    }
     video_set_window_size(true);
 
-    al_set_new_display_option(ALLEGRO_VSYNC, 2, ALLEGRO_SUGGEST);
     if ((display = al_create_display(winsizex, winsizey)) == NULL) {
         log_fatal("video: unable to create display");
         exit(1);
@@ -776,12 +799,12 @@ ALLEGRO_DISPLAY *video_init(void)
 
     nula_default_palette();
 
-    for (c = 0; c < 8; c++)
+    for (int c = 0; c < 8; c++)
         nula_flash[c] = 1;
-    for (temp = 0; temp < 256; temp++) {
-        temp2 = temp;
-        for (c = 0; c < 16; c++) {
-            left = 0;
+    for (int temp = 0; temp < 256; temp++) {
+        int temp2 = temp;
+        for (int c = 0; c < 16; c++) {
+            int left = 0;
             if (temp2 & 2)
                 left |= 1;
             if (temp2 & 8)
@@ -794,7 +817,7 @@ ALLEGRO_DISPLAY *video_init(void)
             temp2 <<= 1;
             temp2 |= 1;
         }
-        for (c = 0; c < 16; c++) {
+        for (int c = 0; c < 16; c++) {
             table4bpp[2][temp][c] = table4bpp[3][temp][c >> 1];
             table4bpp[1][temp][c] = table4bpp[3][temp][c >> 2];
             table4bpp[0][temp][c] = table4bpp[3][temp][c >> 3];
@@ -816,7 +839,7 @@ void video_set_disptype(enum vid_disptype dtype)
 static const uint8_t cursorlook[7] = { 0, 0, 0, 0x80, 0x40, 0x20, 0x20 };
 static const int cdrawlook[4] = { 3, 2, 1, 0 };
 
-static const int cmask[4] = { 0, 0, 16, 32 };
+static const int cmask[4] = { 0, 0, 8, 16 };
 
 static int lasthc0 = 0, lasthc;
 static int ccount = 0;
@@ -840,7 +863,7 @@ void video_reset()
     nula_left_edge = 0;
     nula_left_blank = 0;
     nula_horizontal_offset = 0;
-
+    nula_spect_toggle = 0;
 }
 
 #if 0
@@ -865,7 +888,7 @@ void video_poll(int clocks, int timer_enable)
         scrx += 8;
         vidclocks++;
         oddclock = !oddclock;
-        if (!(ula_ctrl & 0x10) && !oddclock)
+        if (!(ula_ctrl & 0x10) && !oddclock) // Low fequency.
             continue;
 
         if (hc == crtc[1]) { // reached horizontal displayed count.
@@ -880,11 +903,8 @@ void video_poll(int clocks, int timer_enable)
                 scrx = 128 - ((crtc[3] & 15) * 4);
             else
                 scrx = 128 - ((crtc[3] & 15) * 8);
-            scry++;
-            if (scry >= 384) {
-                scry = 0;
-                video_doblit(crtc_mode, crtc[4]);
-            }
+            if (scry < 384)
+                ++scry;
         }
 
         switch(vid_dtype_intern) {
@@ -919,10 +939,10 @@ void video_poll(int clocks, int timer_enable)
                     put_pixels(region, scrx, scry, (ula_ctrl & 0x10) ? 8 : 16, colblack);
                 } else
                     switch (crtc_mode) {
-                    case 0:
+                    case CRTC_TELETEXT:
                         mode7_render(region, dat & 0x7F);
                         break;
-                    case 1:
+                    case CRTC_HIFREQ:
                         {
                             if (scrx < firstx)
                                 firstx = scrx;
@@ -940,7 +960,70 @@ void video_poll(int clocks, int timer_enable)
                                         }
                                         // Very loose approximation of the text attribute mode
                                         nula_putpixel(region, scrx + 7, scry, ula_pal[attribute]);
-                                    } else {
+                                    }
+                                    else if (nula_attribute_mode >= 2) {
+                                        /* Spectrum mode */
+                                        if (nula_spect_toggle) {
+                                            for (int c = -8; c < 8; c += 2) {
+                                                int colour = dat & 0x80 ? nula_spect_ink : nula_spect_paper;
+                                                nula_putpixel(region, scrx + c, scry, colour);
+                                                nula_putpixel(region, scrx + c + 1, scry, colour);
+                                                dat <<= 1;
+                                            }
+                                            nula_spect_toggle = 0;
+                                        }
+                                        else {
+                                            if (dat == 0x80 && nula_attribute_mode == 2) {
+                                                /* Spectrum Border colour */
+                                                nula_spect_ink = nula_spect_paper = nula_collook[0];
+                                            }
+                                            else {
+                                                /* Convert the ink and paper colours from the
+                                                 * attribute byte into indexes into the NuLA 12-bit
+                                                 * pallete as the bits are in the wrong order.
+                                                 */
+                                                int ink = nula_spect_colours[dat & 7];
+                                                int paper = nula_spect_colours[(dat >> 3) & 7];
+                                                if (nula_attribute_mode == 2) {
+                                                    /* Spectrum attributes. */
+                                                    if (dat & 0x40) {
+                                                        // Brightness bit shared between ink and paper.
+                                                        ink |= 0x08;
+                                                        paper |= 0x08;
+                                                    }
+                                                }
+                                                else {
+                                                    /* Thomson attributes.  Black is not mapped to palette
+                                                     * entry 8 like the spectrum.
+                                                     */
+                                                    ink &= 7;
+                                                    paper &= 7;
+                                                    /* Most significant bit, equivalent to brightness bit in
+                                                     * spectrum mode, is separate for fg and bg.
+                                                     */
+                                                    if (dat & 0x40)
+                                                        ink |= 0x08;
+                                                    if (dat & 0x80)
+                                                        paper |= 0x08;
+                                                }
+                                                if (dat & 0x80 && ula_ctrl & 1) {
+                                                    // Flashing - use swapped colours.
+                                                    int tmp = ink;
+                                                    ink = paper;
+                                                    paper = tmp;
+                                                }
+                                                /* Do the lookup into the 12-bit pallete to get final RGB
+                                                 * values now - they will be the same for each of the
+                                                 * pixels that follow.
+                                                 */
+                                                nula_spect_ink = nula_collook[ink];
+                                                nula_spect_paper = nula_collook[paper];
+                                            }
+                                            nula_spect_toggle = 1;
+                                        }
+                                    }
+                                    else {
+                                        /* Normal NuLA attribute mode */
                                         int attribute = ((dat & 3) << 2);
                                         float pc = 0.0f;
                                         for (c = 0; c < 8; c++, pc += 0.75f) {
@@ -964,7 +1047,7 @@ void video_poll(int clocks, int timer_enable)
                             }
                         }
                         break;
-                    case 2:
+                    case CRTC_LOFREQ:
                         {
                             if (scrx < firstx)
                                 firstx = scrx;
@@ -1044,8 +1127,9 @@ void video_poll(int clocks, int timer_enable)
         }
         if (hvblcount) {
             hvblcount--;
-            if (!hvblcount && timer_enable)
+            if (!hvblcount && timer_enable) {
                 sysvia_set_ca1(0);
+            }
         }
 
         if (interline && hc == (crtc[0] >> 1)) {
@@ -1080,6 +1164,7 @@ void video_poll(int clocks, int timer_enable)
                 for (c = 0; c < nula_horizontal_offset * crtc_mode; c++, scrx++) {
                     put_pixel(region, scrx + crtc_mode * 8, scry, colblack);
                 }
+                nula_spect_toggle = 0;
             }
 
             if (sc == (crtc[11] & 31) || ((crtc[8] & 3) == 3 && sc == ((crtc[11] & 31) >> 1))) {
@@ -1092,7 +1177,7 @@ void video_poll(int clocks, int timer_enable)
                 ma = maback;
                 vadj--;
                 if (!vadj) {
-                    vdispen = 1;
+                    vdispen = crtc[6];
                     ma = maback = (crtc[13] | (crtc[12] << 8)) & 0x3FFF;
                     sc = 0;
                 }
@@ -1116,7 +1201,7 @@ void video_poll(int clocks, int timer_enable)
                     vc = 0;
                     vadj = crtc[5];
                     if (!vadj) {
-                        vdispen = 1;
+                        vdispen = crtc[6];
                         ma = maback = (crtc[13] | (crtc[12] << 8)) & 0x3FFF;
                     }
                     frcount++;
@@ -1157,8 +1242,10 @@ void video_poll(int clocks, int timer_enable)
                     if (ccount == 10 || ((!motor || !fasttape) && !is_free_run()))
                         ccount = 0;
                     scry = 0;
-                    if (timer_enable)
+                    if (timer_enable) {
+                        stopwatch_vblank = stopwatch;
                         sysvia_set_ca1(1);
+                    }
 
                     vsynctime = (crtc[3] >> 4) + 1;
                     if (!(crtc[3] >> 4))
