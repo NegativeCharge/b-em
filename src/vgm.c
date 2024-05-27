@@ -114,10 +114,10 @@ void vgm_log_sound(vgm_sound_rec_t* rec)
     if (!rec->rec_started)
         return;
 
-    if (rec->vgmpos) {
+    if (rec->vgmpos)
         fwrite(rec->vgmdat, rec->vgmpos, 1, rec->fp1);
-        putc(0x63, rec->fp1);
-        vgmsamples += 882;
-        rec->vgmpos = 0;
-    }
+        
+    putc(0x63, rec->fp1);
+    vgmsamples += 882;
+    rec->vgmpos = 0;
 }
