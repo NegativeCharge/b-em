@@ -162,6 +162,9 @@ static const uint8_t nula_spect_colours[] =
     7  // 111 White.
 };
 
+ALLEGRO_COLOR border_col;
+static ALLEGRO_COLOR clear_col;
+
 static inline uint32_t makecol(int red, int green, int blue)
 {
     return 0xff000000 | (red << 16) | (green << 8) | blue;
@@ -273,6 +276,15 @@ void nula_reset(void)
         nula_flash[c] = 1;
 }
 
+static void video_set_colour(ALLEGRO_COLOR *colp, const char *desc, unsigned rgba)
+{
+    unsigned red = (rgba & 0xff0000) >> 16;
+    unsigned grn = (rgba & 0x00ff00) >> 8;
+    unsigned blu = (rgba & 0x0000ff);
+    *colp = al_map_rgb(red, grn, blu);
+    log_debug("video: %s colour set to #%08X (%u,%u,%u)", desc, rgba, red, grn, blu);
+}
+
 void videoula_write(uint16_t addr, uint8_t val)
 {
     int c;
@@ -369,6 +381,15 @@ void videoula_write(uint16_t addr, uint8_t val)
                 nula_flash[5] = param & 4;
                 nula_flash[6] = param & 2;
                 nula_flash[7] = param & 1;
+                break;
+
+            case 14:
+                video_set_colour(&border_col, "outer border", nula_collook[param]);
+                break;
+
+            case 15:
+                colblack = nula_collook[param];
+                video_set_colour(&clear_col, "video blank", colblack);
                 break;
 
             default:
@@ -632,10 +653,17 @@ static void mode7_render(ALLEGRO_LOCKED_REGION *region, uint8_t dat)
                 mode7_flash = 0;
                 break;
             case 12: /* 140: normal height */
+                if (mode7_dbl) {
+                    mode7_dbl = 0;
+                    mode7_heldchar = 0;
+                }
+                break;
             case 13: /* 141: double height */
-                mode7_dbl = dat & 1;
-                if (mode7_dbl)
+                if (!mode7_dbl) {
+                    mode7_dbl = 1;
                     mode7_wasdbl = 1;
+                    mode7_heldchar = 0;
+                }
                 break;
             case 17: /* 145: graphics red     */
             case 18: /* 146: graphics green   */
@@ -743,7 +771,7 @@ static void mode7_render(ALLEGRO_LOCKED_REGION *region, uint8_t dat)
 }
 
 uint16_t vidbank;
-static const int screenlen[4] = { 0x4000, 0x5000, 0x2000, 0x2800 };
+const uint_least16_t screenlen[4] = { 0x4000, 0x5000, 0x2000, 0x2800 };
 
 static int vsynctime;
 static int interline;
@@ -828,6 +856,16 @@ ALLEGRO_DISPLAY *video_init(void)
     al_clear_to_color(al_map_rgb(0, 0,0));
     region = al_lock_bitmap(b, ALLEGRO_PIXEL_FORMAT_ARGB_8888, ALLEGRO_LOCK_WRITEONLY);
     return display;
+}
+
+void video_close()
+{
+    al_destroy_bitmap(b32);
+    al_destroy_bitmap(b16);
+    al_destroy_bitmap(b);
+    al_destroy_display(display);
+    if (font_dir)
+        al_destroy_path(font_dir);
 }
 
 void video_set_disptype(enum vid_disptype dtype)

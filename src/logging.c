@@ -44,14 +44,14 @@ static FILE *log_fp;
 static char   tmstr[20];
 static time_t last = 0;
 
-static void log_msgbox(const char *level, char *msg)
+static void log_msgbox(const char *level, char *msg, size_t len)
 {
-    const int max_len = 80;
+    const size_t max_len = 80;
     char *max_ptr, *new_split, *cur_split;
     ALLEGRO_DISPLAY *display;
 
     display = al_get_current_display();
-    if (strlen(msg) < max_len)
+    if (len < max_len)
         al_show_native_message_box(display, level, msg, "", NULL, 0);
     else
     {
@@ -83,17 +83,36 @@ static void log_common(unsigned dest, const char *level, char *msg, size_t len)
             strftime(tmstr, sizeof(tmstr), "%d/%m/%Y %H:%M:%S", localtime(&now));
             last = now;
         }
+#ifdef WIN32
+        _lock_file(log_fp);
         fprintf(log_fp, "%s %s ", tmstr, level);
-        fwrite(msg, len, 1, log_fp);
-        putc('\n', log_fp);
-        fflush(log_fp);
+        _fwrite_nolock(msg, len, 1, log_fp);
+        _fputc_nolock('\n', log_fp);
+        _fflush_nolock(log_fp);
+        _unlock_file(log_fp);
     }
     if (dest & LOG_DEST_STDERR) {
-        fwrite(msg, len, 1, stderr);
-        putc('\n', stderr);
+        _lock_file(stderr);
+        _fwrite_nolock(msg, len, 1, stderr);
+        _fputc_nolock('\n', stderr);
+        _unlock_file(stderr);
+#else
+        flockfile(log_fp);
+        fprintf(log_fp, "%s %s ", tmstr, level);
+        fwrite_unlocked(msg, len, 1, log_fp);
+        fputc_unlocked('\n', log_fp);
+        fflush_unlocked(log_fp);
+        funlockfile(log_fp);
+    }
+    if (dest & LOG_DEST_STDERR) {
+        flockfile(stderr);
+        fwrite_unlocked(msg, len, 1, stderr);
+        fputc_unlocked('\n', stderr);
+        funlockfile(stderr);
+#endif
     }
     if (dest & LOG_DEST_MSGBOX)
-        log_msgbox(level, msg);
+        log_msgbox(level, msg, len);
 }
 
 static char msg_malloc[] = "log_format: out of space - following message truncated";
@@ -136,14 +155,22 @@ void log_debug(const char *fmt, ...)
 static char dmp_malloc[] = "log_dump: out of space, data dump omitted";
 static const char xdigs[] = "0123456789ABCDEF";
 
+static void log_dump_offset(char *ptr, size_t offset)
+{
+    for (int dig = 0; dig < 8; ++dig) {
+        *--ptr = xdigs[offset & 0x0f];
+        offset >>= 4;
+    }
+}
+
 void log_dump(const char *prefix, uint8_t *data, size_t size)
 {
     unsigned opt = log_options & ll_debug.mask;
     if (opt) {
         unsigned dest = opt >> ll_debug.shift;
         size_t pfxlen = strlen(prefix);
-        size_t totlen = pfxlen + 64;
-        char buf[100], *buffer = buf, *hexbase, *ascbase;
+        size_t totlen = pfxlen + 75;
+        char buf[100], *buffer = buf;
         if (totlen > sizeof(buf)) {
             buffer = malloc(totlen);
             if (!buffer) {
@@ -152,9 +179,15 @@ void log_dump(const char *prefix, uint8_t *data, size_t size)
             }
         }
         memcpy(buffer, prefix, pfxlen);
-        hexbase = buffer + pfxlen;
-        ascbase = hexbase + 48;
+        buffer[pfxlen] = ' ';
+        size_t offset = 0;
+        char *offbase = buffer + pfxlen + 9;
+        char *hexbase = offbase;
+        *hexbase++ = ':';
+        *hexbase++ = ' ';
+        char *ascbase = hexbase + 48;
         while (size >= 16) {
+            log_dump_offset(offbase, offset);
             char *hexptr = hexbase;
             char *ascptr = ascbase;
             for (int i = 0; i < 16; i++) {
@@ -168,8 +201,10 @@ void log_dump(const char *prefix, uint8_t *data, size_t size)
             }
             log_common(dest, ll_debug.name, buffer, totlen);
             size -= 16;
+            offset += 16;
         }
         if (size > 0) {
+            log_dump_offset(offbase, offset);
             char *hexptr = hexbase;
             char *ascptr = ascbase;
             size_t pad = 16 - size;
@@ -277,20 +312,20 @@ static int contains(const char *haystack, const char *needle)
     return 0;
 }
 
-static void log_open_file(void) {
-    const char *log_fn;
+static void log_open_file(const char *log_fn)
+{
     ALLEGRO_PATH *path = NULL;
-    int append;
-
-    log_fn = get_config_string(log_section, "log_filename", NULL);
     if (!log_fn) {
-        if ((path = find_cfg_dest(log_default_fn, ".txt")))
-            log_fn = al_path_cstr(path, ALLEGRO_NATIVE_PATH_SEP);
-        else
-            log_warn("log_open: unable to find suitable destination for log file");
+        log_fn = get_config_string(log_section, "log_filename", NULL);
+        if (!log_fn) {
+            if ((path = find_cfg_dest(log_default_fn, ".txt")))
+                log_fn = al_path_cstr(path, ALLEGRO_NATIVE_PATH_SEP);
+            else
+                log_warn("log_open: unable to find suitable destination for log file");
+        }
     }
     if (log_fn) {
-        append = get_config_bool(log_section, "append", 1);
+        bool append = get_config_bool(log_section, "append", 1);
         if ((log_fp = fopen(log_fn, append ? "at" : "wt")) == NULL)
             log_warn("log_open: unable to open log %s: %s", log_fn, strerror(errno));
     }
@@ -298,7 +333,7 @@ static void log_open_file(void) {
         al_destroy_path(path);
 }
 
-void log_open(void)
+void log_open(const char *log_fn)
 {
     const char *to_file, *to_stderr, *to_msgbox;
     unsigned new_opt;
@@ -322,7 +357,7 @@ void log_open(void)
     }
     log_options = new_opt;
     if (open_file)
-        log_open_file();
+        log_open_file(log_fn);
     log_debug("log_open: log options=%x", log_options);
 }
 
