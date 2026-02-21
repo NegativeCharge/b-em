@@ -13,6 +13,12 @@
 #include "music4000.h"
 #include "sound.h"
 
+/* pclose() and popen() on Windows are _pclose() and _popen() */
+#ifdef _WIN32
+#  define pclose _pclose
+#  define popen _popen
+#endif
+
 VIA uservia;
 
 uint8_t lpt_dac;

@@ -222,6 +222,7 @@
     <ClInclude Include="tape.h" />
     <ClInclude Include="tapecat-allegro.h" />
     <ClInclude Include="tapenoise.h" />
+    <ClInclude Include="textsave.h" />
     <ClInclude Include="tube.h" />
     <ClInclude Include="uef.h" />
     <ClInclude Include="uservia.h" />
@@ -348,6 +349,7 @@
     <ClCompile Include="tape.c" />
     <ClCompile Include="tapecat-allegro.c" />
     <ClCompile Include="tapenoise.c" />
+    <ClCompile Include="textsave.c" />
     <ClCompile Include="tube.c" />
     <ClCompile Include="uef.c" />
     <ClCompile Include="uservia.c" />
