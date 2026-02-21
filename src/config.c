@@ -180,6 +180,8 @@ void config_load(ALLEGRO_PATH *path)
     defaultwriteprot = get_config_bool("disc", "defaultwriteprotect", 1);
 
     autopause        = get_config_bool(NULL, "autopause", false);
+    if (hiresdisplay & BOOL_USE_CONFIG)
+        hiresdisplay = get_config_bool(NULL, "hiresdisplay", hiresdisplay & 1);
 
     if (curmodel == -1)
         curmodel = get_config_int(NULL, "model", 3);
@@ -345,6 +347,7 @@ void config_save(void)
             al_remove_config_key(bem_cfg, "tape", "tape");
 
         set_config_bool(NULL, "autopause", autopause);
+        set_config_bool(NULL, "hiresdisplay", hiresdisplay);
 
         set_config_int(NULL, "model", curmodel);
         set_config_int(NULL, "tube", selecttube);
